@@ -1,0 +1,133 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --space-bg: #00000f;
+  --glow-blue: #1a6fff;
+  --glow-cyan: #00d4ff;
+  --text-primary: #e8eeff;
+  --text-dim: #8899bb;
+  --border-glow: rgba(26, 111, 255, 0.25);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background: var(--space-bg);
+  color: var(--text-primary);
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  overflow-x: hidden;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #010218;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(26, 111, 255, 0.4);
+  border-radius: 3px;
+}
+
+/* Glow card */
+.glass-card {
+  background: rgba(0, 5, 20, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border-glow);
+  box-shadow: 0 0 30px rgba(26, 111, 255, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Markdown response */
+.astro-response h1,
+.astro-response h2,
+.astro-response h3 {
+  color: #7ab8ff;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.astro-response h3 {
+  font-size: 1.1rem;
+}
+.astro-response h2 {
+  font-size: 1.2rem;
+}
+.astro-response p {
+  color: #c8d8f0;
+  line-height: 1.75;
+  margin-bottom: 0.75rem;
+}
+.astro-response strong {
+  color: #a8c8ff;
+  font-weight: 600;
+}
+.astro-response table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.85rem;
+}
+.astro-response th {
+  background: rgba(26, 111, 255, 0.12);
+  color: #7ab8ff;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(26, 111, 255, 0.2);
+}
+.astro-response td {
+  padding: 0.4rem 0.75rem;
+  color: #b8cce8;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.astro-response tr:hover td {
+  background: rgba(26, 111, 255, 0.05);
+}
+.astro-response ul,
+.astro-response ol {
+  padding-left: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+.astro-response li {
+  color: #b8cce8;
+  line-height: 1.7;
+  margin-bottom: 0.25rem;
+}
+.astro-response code {
+  background: rgba(26, 111, 255, 0.1);
+  color: #88ccff;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+.astro-response hr {
+  border: none;
+  border-top: 1px solid rgba(26, 111, 255, 0.15);
+  margin: 1rem 0;
+}
+
+/* Streaming cursor */
+.streaming-cursor::after {
+  content: "▋";
+  animation: cursor 1s step-end infinite;
+  color: var(--glow-cyan);
+  margin-left: 2px;
+}
+
+@keyframes cursor {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "watch": ["backend"],
+  "ext": "py,json,env",
+  "ignore": ["backend/__pycache__", "backend/*.pyc", "backend/*.pyo"],
+  "exec": "lsof -ti :8000 | xargs kill -9 2>/dev/null; cd backend && /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3 -m uvicorn main:app --port 8000",
+  "delay": 500
+}

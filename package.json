@@ -1,0 +1,13 @@
+{
+  "name": "astro-agent",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "concurrently -n \"BACKEND,FRONTEND\" -c \"cyan.bold,magenta.bold\" \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:backend": "nodemon",
+    "start:frontend": "npm --prefix frontend run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "nodemon": "^3.1.0"
+  }
+}
