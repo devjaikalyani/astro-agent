@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# Memory store (persistent vector DB + SQLite facts — machine-local)
+backend/memory_store/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -20,6 +23,7 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/.env.local
+frontend/tsconfig.tsbuildinfo
 
 # OS
 .DS_Store

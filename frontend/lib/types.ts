@@ -36,4 +36,9 @@ export const TOOL_LABELS: Record<string, string> = {
   search_by_property: "Searching database",
   compare_celestial_bodies: "Running comparison",
   list_object_types: "Listing objects",
+  search_live_astronomy: "Querying live databases",
+  search_nasa_ads: "Searching research papers",
+  search_mpc: "Querying Minor Planet Center",
+  recall_facts: "Recalling memory",
+  remember_fact: "Storing fact",
 };

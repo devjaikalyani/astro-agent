@@ -8,25 +8,28 @@ An AI-powered astronomical research tool. Ask about any planet, star, nebula, bl
 - Multi-model support: Llama 3.3 70B / Llama 3.1 8B / Gemma 2 9B via Groq, and Claude Sonnet via Anthropic
 - Live astronomical data from SIMBAD, NASA Exoplanet Archive, and JPL Horizons
 - Real NASA imagery pulled from the NASA Image and Video Library
+- Persistent memory: ChromaDB vector store of past tool discoveries + SQLite curated facts
 - Immersive Three.js 3D scene per object type with UnrealBloom postprocessing
 - Milky Way band, spectral-class star colours, and nebula clouds on the home page
 
 ## Stack
 
-| Layer    | Tech                                              |
-|----------|---------------------------------------------------|
-| Frontend | Next.js 15, Three.js, Tailwind CSS, React Markdown |
-| Backend  | FastAPI, Groq SDK, Anthropic SDK, SlowAPI          |
-| AI       | Llama 3.3 70B (Groq), Claude Sonnet (Anthropic)   |
+| Layer    | Tech                                                           |
+|----------|----------------------------------------------------------------|
+| Frontend | Next.js 15.5, Three.js 0.184, Tailwind CSS 4, TypeScript 6    |
+| Backend  | FastAPI, Groq SDK 1.4, Anthropic SDK, SlowAPI                  |
+| Memory   | ChromaDB (semantic search) + SQLite (curated facts)            |
+| AI       | Llama 3.3 70B (Groq), Claude Sonnet 4.6 (Anthropic)           |
 
 ## Setup
 
 ### Prerequisites
 
-- Node.js 18+
-- Python 3.9+
+- Node.js 20+
+- Python 3.11+
 - A [Groq API key](https://console.groq.com/keys)
 - An [Anthropic API key](https://console.anthropic.com/settings/keys) (only needed for Claude model)
+- An [NASA ADS API key](https://ui.adsabs.harvard.edu/user/settings/token) (free — for research paper search)
 
 ### 1. Clone and configure environment
 
@@ -81,6 +84,7 @@ npm --prefix frontend run dev
 │   ├── main.py          # FastAPI app, routing, rate limiting
 │   ├── agent.py         # Groq agentic loop (Llama / Gemma)
 │   ├── agent_claude.py  # Anthropic agentic loop (Claude)
+│   ├── memory.py        # Persistent memory: ChromaDB + SQLite
 │   ├── tools.py         # Astronomical tool definitions + live API calls
 │   └── data.py          # Local celestial body database
 ├── frontend/
@@ -120,10 +124,11 @@ Rate limited: 10 requests/minute, 100/day.
 **Response** — `text/event-stream` SSE
 
 ```
-data: {"type": "status", "message": "Connecting..."}
-data: {"type": "tool_call", "name": "classify_celestial_body", "input": {...}}
+data: {"type": "status",      "message": "Connecting..."}
+data: {"type": "tool_call",   "name": "classify_celestial_body", "input": {...}}
 data: {"type": "tool_result", "name": "classify_celestial_body", "object_type": "moon", "object_name": "Europa"}
-data: {"type": "text_delta", "text": "### Europa — Jovian Moon\n\n"}
+data: {"type": "text_delta",  "text": "### Europa — Jovian Moon\n\n"}
+data: {"type": "error",       "message": "Connection interrupted. Partial response shown."}
 data: {"type": "done"}
 ```
 

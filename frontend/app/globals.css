@@ -1,6 +1,9 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
 
 :root {
   --space-bg: #00000f;
@@ -130,4 +133,32 @@ body {
   50% {
     opacity: 0;
   }
+}
+
+/* Nebula background animation */
+@keyframes nebula-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes nebula-breathe {
+  0%, 100% { filter: brightness(0.80) saturate(1.25); }
+  50%       { filter: brightness(0.92) saturate(1.45); }
+}
+
+.nebula-bg-spin {
+  position: absolute;
+  inset: -18%;
+  background-image: var(--nasa-bg-url);
+  background-size: cover;
+  background-position: center;
+  animation: nebula-spin 200s linear infinite, nebula-breathe 14s ease-in-out infinite;
+}
+
+.nasa-bg-static {
+  position: absolute;
+  inset: 0;
+  background-image: var(--nasa-bg-url);
+  background-size: cover;
+  background-position: center;
+  filter: brightness(0.75) saturate(1.2);
 }

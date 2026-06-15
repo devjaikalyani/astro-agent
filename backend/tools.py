@@ -1,11 +1,17 @@
 import json
+import os
+import re
 import requests
 from typing import Optional
 from data import CELESTIAL_DATABASE
 
-_SIMBAD_TAP = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
+_MEMORY_TOOLS = {"remember_fact", "recall_facts"}
+
+_SIMBAD_TAP    = "https://simbad.cds.unistra.fr/simbad/sim-tap/sync"
 _EXOPLANET_TAP = "https://exoplanetarchive.ipac.caltech.edu/TAP/sync"
-_HORIZONS_API = "https://horizons.jpl.nasa.gov/api/v1/"
+_HORIZONS_API  = "https://horizons.jpl.nasa.gov/api/v1/"
+_ADS_API       = "https://api.adsabs.harvard.edu/v1/search/query"
+_MPC_API       = "https://minorplanetcenter.net"
 
 
 def _search_database(query: str) -> tuple:
@@ -108,6 +114,106 @@ def search_live_astronomy(query: str) -> dict:
     return result
 
 
+def search_nasa_ads(query: str) -> dict:
+    """Search NASA Astrophysics Data System for peer-reviewed research papers."""
+    token = os.environ.get("ADS_API_KEY", "").strip()
+    if not token:
+        return {"found": False, "source": "NASA ADS", "error": "ADS_API_KEY not configured"}
+
+    try:
+        r = requests.get(
+            _ADS_API,
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "q":    f'"{query}"',
+                "fl":   "title,abstract,author,year,bibcode,citation_count,pub",
+                "rows": 5,
+                "sort": "citation_count desc",
+            },
+            timeout=10,
+        )
+        if r.ok:
+            docs = r.json().get("response", {}).get("docs", [])
+            if docs:
+                return {
+                    "found":  True,
+                    "source": "NASA ADS",
+                    "count":  len(docs),
+                    "papers": [
+                        {
+                            "title":     (d.get("title") or [""])[0],
+                            "authors":   (d.get("author") or [])[:3],
+                            "year":      d.get("year"),
+                            "journal":   d.get("pub", ""),
+                            "citations": d.get("citation_count", 0),
+                            "abstract":  (d.get("abstract") or "")[:500],
+                            "bibcode":   d.get("bibcode", ""),
+                        }
+                        for d in docs
+                    ],
+                }
+    except Exception:
+        pass
+
+    return {"found": False, "source": "NASA ADS", "query": query}
+
+
+def search_mpc(query: str) -> dict:
+    """Search the Minor Planet Center for asteroid and comet orbital data."""
+    safe = query.strip()
+    result: dict = {"query": safe, "found": False, "source": "Minor Planet Center"}
+
+    # Attempt 1: MPC JSON object API
+    try:
+        r = requests.get(
+            f"{_MPC_API}/api/objects/{requests.utils.quote(safe)}/",
+            timeout=8,
+        )
+        if r.ok and r.headers.get("content-type", "").startswith("application/json"):
+            data = r.json()
+            if data:
+                result.update({"found": True, **data})
+                return result
+    except Exception:
+        pass
+
+    # Attempt 2: MPC orbital elements (fixed-width text, always available)
+    try:
+        r = requests.get(
+            f"{_MPC_API}/cgi-bin/showobsorbs.cgi",
+            params={"Obj": safe, "orb": "y"},
+            timeout=8,
+        )
+        if r.ok:
+            text = r.text
+            clean = re.sub(r"<[^>]+>", "", text).strip()
+            useful = [l.strip() for l in clean.splitlines() if l.strip() and len(l.strip()) > 4]
+            if len(useful) > 3:
+                result.update({"found": True, "orbital_data": "\n".join(useful[:20])})
+                return result
+    except Exception:
+        pass
+
+    # Attempt 3: MPC comet search
+    try:
+        r = requests.get(
+            f"{_MPC_API}/cgi-bin/returnprepeph.cgi",
+            params={"d": safe, "t": "c"},
+            timeout=8,
+        )
+        if r.ok and safe.lower() in r.text.lower():
+            clean = re.sub(r"<[^>]+>", "", r.text).strip()
+            useful = [l.strip() for l in clean.splitlines() if l.strip()]
+            if useful:
+                result.update({"found": True, "comet_data": "\n".join(useful[:15])})
+                return result
+    except Exception:
+        pass
+
+    result["message"] = "Object not found in MPC. Try the official designation (e.g. '(1) Ceres', '2020 QG')."
+    return result
+
+
 def classify_celestial_body(query: str) -> dict:
     name, data = _search_database(query)
     if data:
@@ -181,6 +287,84 @@ def list_object_types(object_type: str) -> dict:
 
 # Groq uses OpenAI-compatible tool format
 TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_facts",
+            "description": (
+                "Search your persistent memory for relevant facts before answering. "
+                "Call this FIRST for every query — it retrieves past tool discoveries and "
+                "curated facts from previous sessions so you don't repeat work."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Topic or object name to search in memory"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember_fact",
+            "description": (
+                "Permanently store an important astronomical fact you just discovered from a live data source. "
+                "Call this after any tool returns precise new data: distances, masses, temperatures, "
+                "orbital parameters, discovery dates, composition, mission findings. "
+                "Stored facts are recalled automatically in future sessions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fact":       {"type": "string", "description": "The fact, stated precisely and completely"},
+                    "source":     {"type": "string", "description": "Data source: SIMBAD, JPL Horizons, NASA Exoplanet Archive, or known"},
+                    "confidence": {"type": "number", "description": "Confidence 0.0 to 1.0"},
+                },
+                "required": ["fact", "source"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_nasa_ads",
+            "description": (
+                "Search NASA Astrophysics Data System (ADS) for peer-reviewed research papers. "
+                "Use this to find the latest scientific findings, discovery papers, mission results, "
+                "and cutting-edge research about any celestial object or astronomical phenomenon. "
+                "Returns paper titles, authors, year, journal, citation counts, and abstract snippets."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Object name or topic to search for in the literature"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_mpc",
+            "description": (
+                "Search the Minor Planet Center (MPC) for asteroid and comet data. "
+                "Returns orbital elements (semi-major axis, eccentricity, inclination, period), "
+                "object classification (NEO, Atira, Aten, Apollo, Amor, TNO, MBA, etc.), "
+                "discovery circumstances, and provisional designations. "
+                "Best for minor planets, near-Earth objects, and comets not well-covered by JPL Horizons."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Object name or designation (e.g. 'Ceres', '2020 QG', 'Halley')"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -300,13 +484,27 @@ CLAUDE_TOOLS_CACHED = [
 
 
 def run_tool(name: str, tool_input: dict) -> str:
+    # Memory tools are handled here to avoid a circular import
+    if name == "remember_fact":
+        from memory import memory
+        return memory.store_fact(
+            fact=tool_input.get("fact", ""),
+            source=tool_input.get("source", "agent"),
+            confidence=float(tool_input.get("confidence", 1.0)),
+        )
+    if name == "recall_facts":
+        from memory import memory
+        return memory.recall_tool(tool_input.get("query", ""))
+
     dispatch = {
-        "search_live_astronomy": lambda **kw: search_live_astronomy(**kw),
+        "search_nasa_ads":        search_nasa_ads,
+        "search_mpc":             search_mpc,
+        "search_live_astronomy":  lambda **kw: search_live_astronomy(**kw),
         "classify_celestial_body": classify_celestial_body,
-        "get_celestial_info": get_celestial_info,
-        "search_by_property": search_by_property,
+        "get_celestial_info":     get_celestial_info,
+        "search_by_property":     search_by_property,
         "compare_celestial_bodies": compare_celestial_bodies,
-        "list_object_types": list_object_types,
+        "list_object_types":      list_object_types,
     }
     fn = dispatch.get(name)
     if not fn:

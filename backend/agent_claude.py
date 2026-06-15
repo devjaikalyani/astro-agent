@@ -3,9 +3,10 @@ import os
 from pathlib import Path
 from typing import AsyncGenerator, Optional
 from dotenv import load_dotenv
-from anthropic import AsyncAnthropic
-from tools import CLAUDE_TOOLS_CACHED, run_tool
+from anthropic import AsyncAnthropic, APIError as AnthropicAPIError
+from tools import CLAUDE_TOOLS_CACHED, run_tool, _MEMORY_TOOLS
 from agent import SYSTEM_PROMPT
+from memory import memory
 
 # System prompt as a cacheable block — Anthropic caches it after the first call.
 # Render order is: tools → system → messages, so both stable parts get cached.
@@ -28,25 +29,35 @@ def get_claude_client() -> AsyncAnthropic:
 
 async def claude_stream_generator(query: str, model: str = "claude-sonnet-4-6") -> AsyncGenerator[str, None]:
     client = get_claude_client()
-    messages = [{"role": "user", "content": query}]
+
+    # Inject relevant memories as context before the first turn
+    recalled = memory.recall(query)
+    user_content = f"{recalled}\n\n---\n\nUser query: {query}" if recalled else query
+    messages = [{"role": "user", "content": user_content}]
 
     yield f"data: {json.dumps({'type': 'status', 'message': 'Connecting to Claude...'})}\n\n"
 
     while True:
         full_text = ""
 
-        async with client.messages.stream(
-            model=model,
-            max_tokens=8192,
-            system=_SYSTEM_CACHED,
-            messages=messages,
-            tools=CLAUDE_TOOLS_CACHED,
-        ) as stream:
-            async for text in stream.text_stream:
-                full_text += text
-                yield f"data: {json.dumps({'type': 'text_delta', 'text': text})}\n\n"
+        try:
+            stream_ctx = client.messages.stream(
+                model=model,
+                max_tokens=8192,
+                system=_SYSTEM_CACHED,
+                messages=messages,
+                tools=CLAUDE_TOOLS_CACHED,
+            )
+            async with stream_ctx as stream:
+                async for text in stream.text_stream:
+                    full_text += text
+                    yield f"data: {json.dumps({'type': 'text_delta', 'text': text})}\n\n"
 
-            response = await stream.get_final_message()
+                response = await stream.get_final_message()
+        except AnthropicAPIError:
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Connection to Claude interrupted. Partial response shown.'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            return
 
         if response.stop_reason != "tool_use":
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -65,6 +76,10 @@ async def claude_stream_generator(query: str, model: str = "claude-sonnet-4-6") 
 
             result = run_tool(block.name, block.input)
             result_data = json.loads(result)
+
+            # Auto-store live tool results in vector memory
+            if block.name not in _MEMORY_TOOLS:
+                memory.store_tool_result(query, block.name, result_data)
 
             yield f"data: {json.dumps({'type': 'tool_result', 'name': block.name, 'object_type': result_data.get('type') or result_data.get('object_type'), 'object_name': result_data.get('matched_name') or result_data.get('name')})}\n\n"
 

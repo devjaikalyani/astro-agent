@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import AsyncGenerator, Optional
 from dotenv import load_dotenv
 from groq import AsyncGroq, APIError as GroqAPIError
-from tools import TOOLS, run_tool
+from tools import TOOLS, run_tool, _MEMORY_TOOLS
+from memory import memory
 
 load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
@@ -70,22 +71,38 @@ What scientists are still trying to understand about this object.
 - End with a cosmic perspective note
 - NEVER use emojis. No emoji characters anywhere in your response.
 
+## Memory
+
+You have persistent memory that grows with every query answered:
+1. Call `recall_facts` at the very start of every query — it retrieves relevant facts and past discoveries from previous sessions
+2. After any live tool returns precise data (distances, masses, temperatures, orbital parameters, discovery dates), call `remember_fact` to store the key findings
+3. Be selective — remember specific confirmed numbers and findings, not summaries
+4. Memory compounds: the more queries you answer, the richer your knowledge base becomes
+
 ## Tool Usage
 
-1. Call `search_live_astronomy` FIRST for any named object — this queries SIMBAD, NASA Exoplanet Archive, and JPL Horizons in real-time, covering millions of objects
-2. Also call `classify_celestial_body` to check the local database for enriched data
-3. Then call `get_celestial_info` for the full local data record if found
-4. For comparisons use `compare_celestial_bodies`
-5. For property searches use `search_by_property`
-6. Merge live API data with your own astronomical knowledge for the richest possible answer
+1. Call `recall_facts` FIRST — check what you already know from past sessions
+2. Call `search_live_astronomy` for any named object — queries SIMBAD, NASA Exoplanet Archive, and JPL Horizons in real-time
+3. Call `search_mpc` for any asteroid, comet, or minor planet — gets orbital elements, classification, and discovery info from the Minor Planet Center
+4. Call `search_nasa_ads` to find the latest peer-reviewed research papers about the object — always include recent findings
+5. Also call `classify_celestial_body` to check the local database for enriched data
+6. Then call `get_celestial_info` for the full local data record if found
+7. For comparisons use `compare_celestial_bodies`
+8. For property searches use `search_by_property`
+9. Call `remember_fact` after each live tool result to store precise findings
+10. Merge all sources — live databases, research papers, memory, and your training knowledge — for the richest possible answer
 
-Never say you lack information. Between live databases and your training knowledge, you can answer about virtually any celestial body ever catalogued."""
+Never say you lack information. Between live databases, memory, and your training knowledge, you can answer about virtually any celestial body ever catalogued."""
 
 
 async def agent_stream_generator(query: str, model: str = MODEL) -> AsyncGenerator[str, None]:
+    # Inject relevant memories as context before the first turn
+    recalled = memory.recall(query)
+    user_content = f"{recalled}\n\n---\n\nUser query: {query}" if recalled else query
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": query},
+        {"role": "user", "content": user_content},
     ]
 
     yield f"data: {json.dumps({'type': 'status', 'message': 'Connecting to ASTRO...'})}\n\n"
@@ -129,9 +146,7 @@ async def agent_stream_generator(query: str, model: str = MODEL) -> AsyncGenerat
                             collected_tool_calls[idx]["arguments"] += tc.function.arguments
 
         except GroqAPIError:
-            if full_content:
-                msg = json.dumps({"type": "text_delta", "text": "\n\n*Could not complete tool lookup. Answering from knowledge.*\n\n"})
-                yield f"data: {msg}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Connection to ASTRO interrupted. Partial response shown.'})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
             return
 
@@ -164,6 +179,10 @@ async def agent_stream_generator(query: str, model: str = MODEL) -> AsyncGenerat
 
             result = run_tool(tc["name"], tool_input)
             result_data = json.loads(result)
+
+            # Auto-store live tool results in vector memory
+            if tc["name"] not in _MEMORY_TOOLS:
+                memory.store_tool_result(query, tc["name"], result_data)
 
             yield f"data: {json.dumps({'type': 'tool_result', 'name': tc['name'], 'object_type': result_data.get('type') or result_data.get('object_type'), 'object_name': result_data.get('matched_name') or result_data.get('name')})}\n\n"
 

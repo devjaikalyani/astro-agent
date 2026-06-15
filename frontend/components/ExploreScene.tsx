@@ -11,15 +11,14 @@ import { ObjectType, OBJECT_COLORS } from "@/lib/types";
 
 interface ExploreSceneProps {
   objectType: ObjectType;
-  objectName?: string | null;
   nasaImageUrl?: string | null;
 }
 
 // Bloom [strength, radius, threshold] per type
 const BLOOM: Record<string, [number, number, number]> = {
-  black_hole:    [0.9, 0.5, 0.25],  // keep dark — selective glow only on hot rings
+  black_hole:    [0.9, 0.5, 0.25],
   star:          [1.4, 0.6, 0.15],
-  nebula:        [1.0, 0.5, 0.10],
+  nebula:        [1.1, 0.60, 0.32],
   galaxy:        [0.7, 0.4, 0.15],
   comet:         [1.1, 0.5, 0.12],
   planet:        [0.3, 0.3, 0.40],
@@ -27,6 +26,96 @@ const BLOOM: Record<string, [number, number, number]> = {
   moon:          [0.2, 0.2, 0.50],
   asteroid:      [0.2, 0.2, 0.50],
 };
+
+// ── Path A: GLSL procedural Crab Nebula (used when no NASA image is available) ──
+const NEBULA_VERT = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const NEBULA_FRAG = `
+  precision highp float;
+  uniform float uTime;
+  varying vec2 vUv;
+
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+      mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y
+    );
+  }
+  float fbm(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 7; i++) {
+      v += a * vnoise(p);
+      p = mat2(1.6, 1.2, -1.2, 1.6) * p;
+      a *= 0.5;
+    }
+    return v;
+  }
+
+  void main() {
+    vec2 uv = vUv * 2.0 - 1.0;
+
+    // Slow internal rotation
+    float ang = uTime * 0.014;
+    uv = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * uv;
+
+    // Oval boundary — Crab is slightly wider than tall
+    vec2 oval = vec2(uv.x / 1.10, uv.y / 0.96);
+    float r = length(oval);
+    float outerMask = smoothstep(0.95, 0.55, r);
+    if (outerMask < 0.004) discard;
+
+    // Domain-warped fBm cloud (gives filamentary, non-uniform texture)
+    float t = uTime * 0.005;
+    vec2 q = uv * 2.9;
+    vec2 warp = vec2(fbm(q + t), fbm(q + vec2(5.2, 1.3) + t * 0.8));
+    float cloud = fbm(q + 1.9 * warp + t * 0.6);
+
+    // Dark voids — two noise layers thresholded to create the cellular bubbly interior
+    float v1 = fbm(uv * 3.5 + vec2(1.1, 0.9) + t * 0.7);
+    float v2 = fbm(uv * 2.8 + vec2(-0.9, 1.6) + t * 0.5);
+    float voids = smoothstep(0.33, 0.58, (v1 + v2) * 0.5 + cloud * 0.12);
+
+    // Filaments — ridge noise: bright where two fbm values are nearly equal
+    vec2 fq = uv * 5.4 + t * 1.3;
+    float fa = fbm(fq);
+    float fb = fbm(fq + vec2(2.3, 1.9));
+    float filament = pow(max(0.0, 1.0 - abs(fa - fb) * 5.2), 4.5);
+    // S-curve weighting concentrates filaments along a diagonal band like the real Crab
+    float sCurve = exp(-7.0 * pow(uv.y - 0.28 * sin(uv.x * 2.5) - uv.x * 0.18, 2.0));
+    filament *= (0.18 + 0.82 * sCurve);
+
+    // Color palette
+    vec3 voidClr    = vec3(0.010, 0.004, 0.055);
+    vec3 deepPurple = vec3(0.130, 0.040, 0.500);
+    vec3 midPurple  = vec3(0.260, 0.090, 0.760);
+    vec3 blueViolet = vec3(0.200, 0.135, 0.840);
+    vec3 hotPink    = vec3(0.960, 0.175, 0.520);
+
+    vec3 color = mix(deepPurple, mix(midPurple, blueViolet, cloud), cloud);
+    color = mix(voidClr, color, voids);
+    // Blue outer haze
+    color = mix(color, blueViolet * 0.52, smoothstep(0.28, 0.90, r) * 0.38);
+    // Filaments
+    color += hotPink * filament * 0.92;
+
+    float alpha = cloud * voids * outerMask;
+    alpha = pow(alpha, 0.60);
+    alpha = clamp(alpha + filament * sCurve * 0.58, 0.0, 1.0) * outerMask;
+
+    gl_FragColor = vec4(color, alpha);
+  }
+`;
 
 // These types show the NASA photo as a full-screen CSS background
 const BG_TYPES = new Set(["galaxy", "nebula", "comet"]);
@@ -124,6 +213,7 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
 
     // ── Per-type scene ────────────────────────────────────────────────────────
     let animFn: ((frame: number) => void) | null = null;
+    const disposeList: Array<{ dispose(): void }> = [];
 
     if (type === "black_hole") {
       const DISK_TILT = Math.PI / 2 - 0.08;
@@ -256,48 +346,84 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       };
 
     } else if (type === "nebula") {
-      const count = 5000;
-      const pos = new Float32Array(count * 3);
-      const cols = new Float32Array(count * 3);
-      const palette = [
-        new THREE.Color(0xcc44ff), new THREE.Color(0xff4499),
-        new THREE.Color(0x44ddff), new THREE.Color(0x8833ee),
-        new THREE.Color(0xff88cc),
-      ];
-      for (let i = 0; i < count; i++) {
-        const r = Math.pow(Math.random(), 0.45) * 9;
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2 * Math.random() - 1);
-        pos[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
-        pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta) * 0.55;
-        pos[i * 3 + 2] = r * Math.cos(phi);
-        const c = palette[Math.floor(Math.random() * palette.length)];
-        cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b;
+
+      if (!showNasaBg) {
+        // ── PATH A: no NASA image — render procedural GLSL nebula ────────────
+        const nebMesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(16, 16),
+          new THREE.ShaderMaterial({
+            uniforms: { uTime: { value: 0.0 } },
+            vertexShader: NEBULA_VERT,
+            fragmentShader: NEBULA_FRAG,
+            transparent: true,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        scene.add(nebMesh);
+        disposeList.push(nebMesh.geometry, nebMesh.material as THREE.ShaderMaterial);
+
+        // Sparse outer particles for 3-D depth/parallax around the shader mesh
+        const spPos: number[] = [], spCol: number[] = [];
+        for (let i = 0; i < 2200; i++) {
+          const theta = Math.random() * Math.PI * 2;
+          const phi   = Math.acos(2 * Math.random() - 1);
+          const r     = 3.6 + Math.random() * 2.4;
+          spPos.push(r * Math.sin(phi) * Math.cos(theta) * 1.18,
+                     r * Math.sin(phi) * Math.sin(theta) * 0.86,
+                     r * Math.cos(phi) * 0.9);
+          const v = 0.30 + Math.random() * 0.40;
+          spCol.push(v * 0.28, v * 0.06, v * 0.88);
+        }
+        const spGeo = new THREE.BufferGeometry();
+        spGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(spPos), 3));
+        spGeo.setAttribute("color",    new THREE.BufferAttribute(new Float32Array(spCol), 3));
+        const spMat = new THREE.PointsMaterial({
+          size: 0.13, sizeAttenuation: true, transparent: true, opacity: 0.70,
+          vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false,
+        });
+        const spCloud = new THREE.Points(spGeo, spMat);
+        scene.add(spCloud);
+        disposeList.push(spGeo, spMat);
+
+        animFn = (frame) => {
+          nebMesh.lookAt(camera.position);
+          (nebMesh.material as THREE.ShaderMaterial).uniforms.uTime.value = frame * 0.016;
+          spCloud.rotation.y += 0.00030;
+          spCloud.rotation.z += 0.00010;
+          spMat.opacity = 0.65 + 0.08 * Math.sin(frame * 0.007);
+        };
+
+      } else {
+        // ── PATH B: NASA image is the primary visual ──────────────────────────
+        // Only add a faint outer particle halo for depth — the photo does the rest.
+        const spPos: number[] = [], spCol: number[] = [];
+        for (let i = 0; i < 1000; i++) {
+          const theta = Math.random() * Math.PI * 2;
+          const phi   = Math.acos(2 * Math.random() - 1);
+          const r     = 4.0 + Math.random() * 2.0;
+          spPos.push(r * Math.sin(phi) * Math.cos(theta) * 1.15,
+                     r * Math.sin(phi) * Math.sin(theta) * 0.82,
+                     r * Math.cos(phi) * 0.5);
+          const v = 0.45 + Math.random() * 0.35;
+          spCol.push(v * 0.26, v * 0.05, v * 0.90);
+        }
+        const spGeo = new THREE.BufferGeometry();
+        spGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(spPos), 3));
+        spGeo.setAttribute("color",    new THREE.BufferAttribute(new Float32Array(spCol), 3));
+        const spMat = new THREE.PointsMaterial({
+          size: 0.40, sizeAttenuation: true, transparent: true, opacity: 0.10,
+          vertexColors: true, blending: THREE.NormalBlending, depthWrite: false,
+        });
+        const spCloud = new THREE.Points(spGeo, spMat);
+        scene.add(spCloud);
+        disposeList.push(spGeo, spMat);
+
+        animFn = (frame) => {
+          spCloud.rotation.y += 0.00025;
+          spMat.opacity = 0.08 + 0.04 * Math.sin(frame * 0.006);
+        };
       }
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-      geo.setAttribute("color", new THREE.BufferAttribute(cols, 3));
-      const mat = new THREE.PointsMaterial({
-        size: 0.28, sizeAttenuation: true, transparent: true,
-        opacity: showNasaBg ? 0.35 : 0.75,
-        vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      const cloud = new THREE.Points(geo, mat);
-      scene.add(cloud);
-
-      scene.add(new THREE.Mesh(
-        new THREE.SphereGeometry(1.8, 32, 32),
-        new THREE.MeshBasicMaterial({
-          color: 0xcc44ff, transparent: true, opacity: 0.12,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      ));
-
-      animFn = (frame) => {
-        cloud.rotation.y += 0.0008;
-        cloud.rotation.x += 0.0003;
-        mat.opacity = (showNasaBg ? 0.25 : 0.6) + 0.12 * Math.sin(frame * 0.008);
-      };
 
     } else if (type === "galaxy") {
       const count = 6000;
@@ -558,6 +684,7 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       renderer.dispose();
       starGeo.dispose();
       starMat.dispose();
+      disposeList.forEach((obj) => obj.dispose());
     };
   }, [objectType, nasaImageUrl]);
 
@@ -567,10 +694,13 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
   return (
     <div className="fixed inset-0 z-0">
       {showNasaBg && (
-        <div
-          className="absolute inset-0 bg-cover bg-center"
-          style={{ backgroundImage: `url(${nasaImageUrl})`, filter: "brightness(0.75) saturate(1.2)" }}
-        />
+        type === "nebula" ? (
+          <div className="absolute inset-0 overflow-hidden">
+            <div className="nebula-bg-spin" style={{ "--nasa-bg-url": `url(${nasaImageUrl})` } as React.CSSProperties} />
+          </div>
+        ) : (
+          <div className="nasa-bg-static" style={{ "--nasa-bg-url": `url(${nasaImageUrl})` } as React.CSSProperties} />
+        )
       )}
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
     </div>

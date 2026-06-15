@@ -107,6 +107,9 @@ function ExploreContent() {
             else if (ev.type === "tool_result") {
               if (ev.object_type) setObjectType(ev.object_type as ObjectType);
               if (ev.object_name) setObjectName(ev.object_name);
+            } else if (ev.type === "error") {
+              setResponseText((p) => p ? `${p}\n\n*${ev.message}*` : `*${ev.message}*`);
+              setIsStreaming(false);
             } else if (ev.type === "done") setIsStreaming(false);
           } catch { /* skip */ }
         }
@@ -138,7 +141,7 @@ function ExploreContent() {
   return (
     <div className="fixed inset-0 overflow-hidden">
       {/* Full-screen 3D scene */}
-      <ExploreScene objectType={objectType} objectName={objectName} nasaImageUrl={nasaImageUrl} />
+      <ExploreScene objectType={objectType} nasaImageUrl={nasaImageUrl} />
 
       {/* Subtle vignette */}
       <div
