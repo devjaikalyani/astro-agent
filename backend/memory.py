@@ -10,7 +10,7 @@ import hashlib
 import json
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import chromadb
@@ -87,7 +87,7 @@ class MemoryStore:
                     "tool":        tool_name,
                     "object_name": str(result.get("name") or result.get("matched_name") or ""),
                     "object_type": str(result.get("type") or result.get("object_type") or ""),
-                    "ts":          datetime.utcnow().isoformat(),
+                    "ts":          datetime.now(timezone.utc).isoformat(),
                 }],
             )
         except Exception:
@@ -144,19 +144,22 @@ class MemoryStore:
                 params: list = [f"%{k}%" for k in keywords]
                 with self._db_lock:
                     rows = self._db.execute(
-                        f"SELECT fact, source, confidence FROM facts "
+                        f"SELECT id, fact, source, confidence FROM facts "
                         f"WHERE {like_parts} "
                         f"ORDER BY confidence DESC, access_count DESC LIMIT ?",
                         params + [n_facts],
                     ).fetchall()
                     if rows:
+                        ids = [r[0] for r in rows]
+                        placeholders = ",".join("?" for _ in ids)
                         self._db.execute(
-                            f"UPDATE facts SET access_count = access_count + 1 WHERE {like_parts}",
-                            params,
+                            f"UPDATE facts SET access_count = access_count + 1 "
+                            f"WHERE id IN ({placeholders})",
+                            ids,
                         )
                         self._db.commit()
                 if rows:
-                    lines = [f"- {r[0]}  (source: {r[1]}, confidence: {r[2]:.1f})" for r in rows]
+                    lines = [f"- {r[1]}  (source: {r[2]}, confidence: {r[3]:.1f})" for r in rows]
                     sections.append("### Remembered facts\n" + "\n".join(lines))
         except Exception:
             pass

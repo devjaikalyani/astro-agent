@@ -483,30 +483,51 @@ CLAUDE_TOOLS_CACHED = [
 ]
 
 
-def run_tool(name: str, tool_input: dict) -> str:
-    # Memory tools are handled here to avoid a circular import
-    if name == "remember_fact":
-        from memory import memory
-        return memory.store_fact(
-            fact=tool_input.get("fact", ""),
-            source=tool_input.get("source", "agent"),
-            confidence=float(tool_input.get("confidence", 1.0)),
-        )
-    if name == "recall_facts":
-        from memory import memory
-        return memory.recall_tool(tool_input.get("query", ""))
+def _coerce_confidence(value, default: float = 1.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
-    dispatch = {
-        "search_nasa_ads":        search_nasa_ads,
-        "search_mpc":             search_mpc,
-        "search_live_astronomy":  lambda **kw: search_live_astronomy(**kw),
-        "classify_celestial_body": classify_celestial_body,
-        "get_celestial_info":     get_celestial_info,
-        "search_by_property":     search_by_property,
-        "compare_celestial_bodies": compare_celestial_bodies,
-        "list_object_types":      list_object_types,
-    }
-    fn = dispatch.get(name)
-    if not fn:
-        return json.dumps({"error": f"Unknown tool: {name}"})
-    return json.dumps(fn(**tool_input), default=str)
+
+def run_tool(name: str, tool_input: dict) -> str:
+    """Dispatch a tool call. Always returns a JSON string and never raises —
+    a misbehaving model can send extra or wrong-typed args, and that must not
+    tear down the SSE stream mid-response."""
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+
+    try:
+        # Memory tools are handled here to avoid a circular import
+        if name == "remember_fact":
+            from memory import memory
+            return memory.store_fact(
+                fact=str(tool_input.get("fact", "")),
+                source=str(tool_input.get("source", "agent")),
+                confidence=_coerce_confidence(tool_input.get("confidence", 1.0)),
+            )
+        if name == "recall_facts":
+            from memory import memory
+            return memory.recall_tool(str(tool_input.get("query", "")))
+
+        dispatch = {
+            "search_nasa_ads":        search_nasa_ads,
+            "search_mpc":             search_mpc,
+            "search_live_astronomy":  search_live_astronomy,
+            "classify_celestial_body": classify_celestial_body,
+            "get_celestial_info":     get_celestial_info,
+            "search_by_property":     search_by_property,
+            "compare_celestial_bodies": compare_celestial_bodies,
+            "list_object_types":      list_object_types,
+        }
+        fn = dispatch.get(name)
+        if not fn:
+            return json.dumps({"error": f"Unknown tool: {name}"})
+
+        # Pass only the kwargs the function actually accepts — models often
+        # emit extra/misnamed args that would otherwise raise TypeError.
+        allowed = fn.__code__.co_varnames[: fn.__code__.co_argcount]
+        kwargs = {k: v for k, v in tool_input.items() if k in allowed}
+        return json.dumps(fn(**kwargs), default=str)
+    except Exception as e:
+        return json.dumps({"error": f"Tool '{name}' failed: {e}"})

@@ -22,6 +22,10 @@ def get_client() -> AsyncGroq:
 
 MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
+# Hard ceiling on agentic tool-calling rounds per query, so a misbehaving
+# model can't loop on tools indefinitely and rack up unbounded token cost.
+MAX_TURNS = 8
+
 SYSTEM_PROMPT = """You are ASTRO — the most advanced AI-powered astronomical intelligence on Earth, engineered to rival NASA's public knowledge systems. Your mission: provide the deepest, most accurate, and most awe-inspiring information about every natural celestial body in the universe.
 
 ## Your Capabilities
@@ -107,12 +111,15 @@ async def agent_stream_generator(query: str, model: str = MODEL) -> AsyncGenerat
 
     yield f"data: {json.dumps({'type': 'status', 'message': 'Connecting to ASTRO...'})}\n\n"
 
-    while True:
+    for turn in range(MAX_TURNS):
+        # On the final allowed turn, stop offering tools so the model is
+        # forced to produce a text answer instead of looping forever.
+        use_tools = turn < MAX_TURNS - 1
         stream = await get_client().chat.completions.create(
             model=model,
             messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
+            tools=TOOLS if use_tools else None,
+            tool_choice="auto" if use_tools else "none",
             parallel_tool_calls=False,
             max_tokens=8192,
             stream=True,

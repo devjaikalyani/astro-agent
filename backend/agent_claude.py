@@ -8,6 +8,10 @@ from tools import CLAUDE_TOOLS_CACHED, run_tool, _MEMORY_TOOLS
 from agent import SYSTEM_PROMPT
 from memory import memory
 
+# Hard ceiling on agentic tool-calling rounds per query, so a misbehaving
+# model can't loop on tools indefinitely and rack up unbounded token cost.
+MAX_TURNS = 8
+
 # System prompt as a cacheable block — Anthropic caches it after the first call.
 # Render order is: tools → system → messages, so both stable parts get cached.
 _SYSTEM_CACHED = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
@@ -37,8 +41,12 @@ async def claude_stream_generator(query: str, model: str = "claude-sonnet-4-6") 
 
     yield f"data: {json.dumps({'type': 'status', 'message': 'Connecting to Claude...'})}\n\n"
 
-    while True:
+    for turn in range(MAX_TURNS):
         full_text = ""
+
+        # On the final allowed turn, force a text answer (tools stay defined
+        # because the history holds tool_use blocks) so we never loop forever.
+        tool_choice = {"type": "auto"} if turn < MAX_TURNS - 1 else {"type": "none"}
 
         try:
             stream_ctx = client.messages.stream(
@@ -47,6 +55,7 @@ async def claude_stream_generator(query: str, model: str = "claude-sonnet-4-6") 
                 system=_SYSTEM_CACHED,
                 messages=messages,
                 tools=CLAUDE_TOOLS_CACHED,
+                tool_choice=tool_choice,
             )
             async with stream_ctx as stream:
                 async for text in stream.text_stream:
