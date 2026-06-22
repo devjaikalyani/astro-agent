@@ -1,0 +1,19 @@
+Texture credits
+===============
+
+Planets (Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune),
+the Sun, Earth's Moon, and Earth cloud map:
+  Solar System Scope — https://www.solarsystemscope.com/textures/
+  Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
+
+Titan:
+  Steve Albers, from NASA/Cassini mosaics — https://stevealbers.net/albers/sos/sos.html
+  NASA imagery is in the public domain.
+
+These are equirectangular surface maps wrapped onto the 3D bodies in
+ExploreScene. Bodies without a bundled map render procedurally instead.
+
+To add more bodies (e.g. Europa, Io, Ganymede, Callisto): drop an
+equirectangular map named <body>.jpg here and add an entry to
+frontend/lib/textures.ts. USGS global mosaics:
+  https://astrogeology.usgs.gov/search?pmi-target=europa

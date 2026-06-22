@@ -26,6 +26,17 @@ MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 # model can't loop on tools indefinitely and rack up unbounded token cost.
 MAX_TURNS = 8
 
+
+def _groq_error_message(e: Exception) -> str:
+    """Turn a Groq API error into a friendly, actionable SSE message."""
+    status = getattr(e, "status_code", None)
+    if status in (413, 429):
+        return (
+            "This model hit its per-minute token limit on the free tier. "
+            "Wait ~30s and retry, or switch to a different model."
+        )
+    return "Connection to ASTRO interrupted. Partial response shown."
+
 SYSTEM_PROMPT = """You are ASTRO — the most advanced AI-powered astronomical intelligence on Earth, engineered to rival NASA's public knowledge systems. Your mission: provide the deepest, most accurate, and most awe-inspiring information about every natural celestial body in the universe.
 
 ## Your Capabilities
@@ -115,21 +126,22 @@ async def agent_stream_generator(query: str, model: str = MODEL) -> AsyncGenerat
         # On the final allowed turn, stop offering tools so the model is
         # forced to produce a text answer instead of looping forever.
         use_tools = turn < MAX_TURNS - 1
-        stream = await get_client().chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=TOOLS if use_tools else None,
-            tool_choice="auto" if use_tools else "none",
-            parallel_tool_calls=False,
-            max_tokens=8192,
-            stream=True,
-        )
-
         full_content = ""
         collected_tool_calls: dict[int, dict] = {}
         finish_reason = None
 
         try:
+            # create() hits the API here, so it must be inside the try —
+            # a 413/429 (rate/size limit) would otherwise crash the stream.
+            stream = await get_client().chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=TOOLS if use_tools else None,
+                tool_choice="auto" if use_tools else "none",
+                parallel_tool_calls=False,
+                max_tokens=4000,
+                stream=True,
+            )
             async for chunk in stream:
                 choice = chunk.choices[0]
                 delta = choice.delta
@@ -152,8 +164,8 @@ async def agent_stream_generator(query: str, model: str = MODEL) -> AsyncGenerat
                         if tc.function.arguments:
                             collected_tool_calls[idx]["arguments"] += tc.function.arguments
 
-        except GroqAPIError:
-            yield f"data: {json.dumps({'type': 'error', 'message': 'Connection to ASTRO interrupted. Partial response shown.'})}\n\n"
+        except GroqAPIError as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': _groq_error_message(e)})}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
             return
 

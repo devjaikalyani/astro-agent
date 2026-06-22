@@ -116,7 +116,7 @@ function ExploreContent() {
 
   return (
     <div className="hud-frame fixed inset-0 overflow-hidden">
-      <ExploreScene objectType={objectType} />
+      <ExploreScene objectType={objectType} objectName={objectName || query} />
 
       {/* Vignette */}
       <div

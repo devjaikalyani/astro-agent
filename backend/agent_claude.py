@@ -51,7 +51,7 @@ async def claude_stream_generator(query: str, model: str = "claude-sonnet-4-6") 
         try:
             stream_ctx = client.messages.stream(
                 model=model,
-                max_tokens=8192,
+                max_tokens=4000,
                 system=_SYSTEM_CACHED,
                 messages=messages,
                 tools=CLAUDE_TOOLS_CACHED,

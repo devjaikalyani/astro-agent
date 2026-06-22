@@ -31,7 +31,7 @@ export default function Home() {
       />
       <div
         className="pointer-events-none fixed inset-0"
-        style={{ zIndex: 1, background: "radial-gradient(ellipse 760px 520px at 50% 48%, rgba(0,3,16,0.55) 0%, transparent 70%)" }}
+        style={{ zIndex: 1, background: "radial-gradient(ellipse 720px 440px at 50% 46%, rgba(0,2,12,0.72) 0%, rgba(0,2,12,0.35) 45%, transparent 72%)" }}
       />
 
       {/* Top status bar */}

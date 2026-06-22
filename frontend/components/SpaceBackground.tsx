@@ -137,7 +137,8 @@ export default function SpaceBackground({ objectType, hasContent }: SpaceBackgro
 
     // ── Hero gas-giant planet (procedural surface + atmosphere + ring) ─────
     const planetGroup = new THREE.Group();
-    planetGroup.position.set(3.6, -2.1, -1.0);
+    // Lower-right so the centered title/search column sits over dark space
+    planetGroup.position.set(4.8, -3.9, -1.5);
     scene.add(planetGroup);
 
     const R = 3.0;
@@ -256,7 +257,7 @@ export default function SpaceBackground({ objectType, hasContent }: SpaceBackgro
       const driftY = Math.cos(t * 0.05) * 0.4 - py * 0.9;
       camera.position.x += (driftX - camera.position.x) * 0.03;
       camera.position.y += (driftY - camera.position.y) * 0.03;
-      camera.lookAt(1.4, -0.4, 0);
+      camera.lookAt(1.2, 0.2, 0);
 
       composer.render();
     };

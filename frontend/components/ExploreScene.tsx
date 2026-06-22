@@ -11,9 +11,11 @@ import {
   radialSprite,
 } from "@/lib/three-utils";
 import { ObjectType } from "@/lib/types";
+import { TextureSet, textureFor } from "@/lib/textures";
 
 interface ExploreSceneProps {
   objectType: ObjectType;
+  objectName?: string;
 }
 
 // ── Surface fragment shaders (paired with BODY_VERT) ───────────────────────
@@ -126,6 +128,44 @@ const CLOUD_FRAG = /* glsl */ `
     vec3 N = normalize(vWorldN);
     float day = smoothstep(-0.05, 0.6, dot(N, normalize(uLightDir)));
     gl_FragColor = vec4(vec3(1.0) * day, a * day * 0.85);
+  }
+`;
+
+// Icy moon (Europa-class): bright cream ice, reddish-brown lineae crack
+// network (domain-warped noise near zero-crossings), and chaos terrain.
+const ICY_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform vec3 uLightDir;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  ${SIMPLEX_3D}
+  void main() {
+    vec3 p = normalize(vLocal);
+    float mott = fbm(p * 3.0) * 0.5 + 0.5;
+    vec3 ice = mix(vec3(0.78, 0.83, 0.88), vec3(0.96, 0.92, 0.82), mott);
+    float chaos = smoothstep(0.2, 0.55, fbm(p * 2.0 + 10.0));
+    vec3 rust = vec3(0.60, 0.40, 0.28);
+    vec3 base = mix(ice, mix(ice, rust, 0.6), chaos * 0.5);
+
+    // Domain-warped lineae: thin lines at noise zero-crossings, several scales
+    vec3 wp = p + 0.35 * vec3(fbm(p * 1.5), fbm(p * 1.5 + 5.0), fbm(p * 1.5 + 9.0));
+    float l1 = 1.0 - smoothstep(0.0, 0.05, abs(fbm(wp * 2.2)));
+    float l2 = 1.0 - smoothstep(0.0, 0.035, abs(fbm(wp * 4.5 + 3.0)));
+    float l3 = 1.0 - smoothstep(0.0, 0.025, abs(snoise(wp * 8.0)));
+    float lineae = clamp(l1 + l2 * 0.7 + l3 * 0.5, 0.0, 1.0);
+    base = mix(base, vec3(0.42, 0.16, 0.10), lineae * 0.75);
+
+    vec3 N = normalize(vWorldN);
+    vec3 L = normalize(uLightDir);
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    float d = dot(N, L);
+    float day = smoothstep(-0.08, 0.6, d);
+    vec3 col = base * (0.05 + day * 1.12);
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), 36.0) * day * (1.0 - lineae);
+    col += vec3(0.8, 0.86, 0.95) * spec * 0.25;
+    gl_FragColor = vec4(col, 1.0);
   }
 `;
 
@@ -292,7 +332,23 @@ function displacedRock(R: number, detail: number, amp: number, elong: THREE.Vect
   return new THREE.Mesh(geo, mat);
 }
 
-function buildMoon(scene: THREE.Scene, bag: DisposalBag): Update {
+const ICY_MOONS = /europa|enceladus|ganymede|callisto|mimas|tethys|dione|rhea|titan|triton|charon|pluto|ceres/;
+
+function buildIcyMoon(scene: THREE.Scene, bag: DisposalBag, L: THREE.Vector3): Update {
+  const R = 2.1;
+  const geo = bag.add(new THREE.SphereGeometry(R, 144, 144));
+  const mat = bag.add(new THREE.ShaderMaterial({ uniforms: { uTime: { value: 0 }, uLightDir: { value: L } }, vertexShader: BODY_VERT, fragmentShader: ICY_FRAG }));
+  const moon = new THREE.Mesh(geo, mat);
+  scene.add(moon);
+  return (t) => {
+    mat.uniforms.uTime.value = t;
+    moon.rotation.y += 0.0008;
+  };
+}
+
+function buildMoon(scene: THREE.Scene, bag: DisposalBag, L: THREE.Vector3, name: string): Update {
+  if (ICY_MOONS.test(name)) return buildIcyMoon(scene, bag, L);
+  // Rocky moon (Luna, Phobos, Deimos): cratered grey body
   const moon = displacedRock(2.1, 5, 0.07, new THREE.Vector3(1, 1, 1), 0x9aa0a8, bag);
   scene.add(moon);
   return () => {
@@ -367,66 +423,115 @@ function buildComet(scene: THREE.Scene, bag: DisposalBag, L: THREE.Vector3, spri
 function buildNebula(scene: THREE.Scene, bag: DisposalBag, sprite: THREE.Texture): Update {
   const g = new THREE.Group();
   scene.add(g);
-  const PALETTE = [0x8a3bd6, 0x3b6fd6, 0xd64f93, 0x3bd6c0];
 
-  const envCount = 22000;
-  const epos: number[] = [];
-  const ecol: number[] = [];
-  let guard = 0;
-  while (epos.length / 3 < envCount && guard < envCount * 6) {
-    guard++;
-    const theta = Math.random() * Math.PI * 2;
-    const phi = Math.acos(2 * Math.random() - 1);
-    const r = 6 * Math.cbrt(Math.random());
-    const x = r * Math.sin(phi) * Math.cos(theta);
-    const y = r * Math.sin(phi) * Math.sin(theta) * 0.8;
-    const z = r * Math.cos(phi);
-    const density = fbm3(x * 0.35 + 3, y * 0.35, z * 0.35);
-    if (density < 0.45) continue;
-    epos.push(x, y, z);
-    const c = new THREE.Color(PALETTE[Math.floor(Math.random() * PALETTE.length)]);
-    const b = 0.4 + density * 0.6;
-    ecol.push(c.r * b, c.g * b, c.b * b);
-  }
-  const egeo = bag.add(new THREE.BufferGeometry());
-  egeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(epos), 3));
-  egeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(ecol), 3));
-  const emat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.5, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
-  g.add(new THREE.Points(egeo, emat));
+  // Ovoid envelope (the Crab is a slightly squashed egg)
+  const SX = 1.18, SY = 0.92, SZ = 1.0, RAD = 5.2;
+  const ovoidR = (x: number, y: number, z: number) =>
+    Math.sqrt((x / (RAD * SX)) ** 2 + (y / (RAD * SY)) ** 2 + (z / (RAD * SZ)) ** 2);
 
-  const strands = 60;
-  const perStrand = 220;
-  const fpos: number[] = [];
-  const fcol: number[] = [];
-  for (let s = 0; s < strands; s++) {
-    let p = new THREE.Vector3((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 8);
-    const c = new THREE.Color(PALETTE[s % PALETTE.length]).lerp(new THREE.Color(0xffffff), 0.3);
-    for (let i = 0; i < perStrand; i++) {
-      const dir = new THREE.Vector3(
-        fbm3(p.x * 0.3, p.y * 0.3, p.z * 0.3 + 10) - 0.5,
-        fbm3(p.x * 0.3 + 20, p.y * 0.3, p.z * 0.3) - 0.5,
-        fbm3(p.x * 0.3, p.y * 0.3 + 30, p.z * 0.3) - 0.5,
-      ).normalize().multiplyScalar(0.16);
-      p = p.clone().add(dir);
-      if (p.length() > 7) break;
-      fpos.push(p.x, p.y, p.z);
-      fcol.push(c.r, c.g, c.b);
+  const addPoints = (pos: number[], col: number[], size: number, opacity: number, blend: THREE.Blending) => {
+    const geo = bag.add(new THREE.BufferGeometry());
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pos), 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(col), 3));
+    const mat = bag.add(new THREE.PointsMaterial({ map: sprite, size, vertexColors: true, sizeAttenuation: true, transparent: true, opacity, blending: blend, depthWrite: false }));
+    g.add(new THREE.Points(geo, mat));
+  };
+
+  // 1. Bluish synchrotron body — NORMAL blending so overlapping particles
+  //    converge to blue instead of summing to white. Carved into bays/voids.
+  {
+    const target = 16000;
+    const pos: number[] = [], col: number[] = [];
+    const ca = new THREE.Color(0x3a4ec4), cb = new THREE.Color(0x6356c6);
+    let guard = 0;
+    while (pos.length / 3 < target && guard < target * 8) {
+      guard++;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const rr = Math.pow(Math.random(), 0.5);
+      const x = rr * Math.sin(phi) * Math.cos(theta) * RAD * SX;
+      const y = rr * Math.sin(phi) * Math.sin(theta) * RAD * SY;
+      const z = rr * Math.cos(phi) * RAD * SZ;
+      // Sharper noise gate => pronounced dark bays and a fibrous edge
+      if (fbm3(x * 0.42 + 2, y * 0.42, z * 0.42 + 7) < 0.52) continue;
+      pos.push(x, y, z);
+      const c = ca.clone().lerp(cb, Math.random());
+      const b = 0.4 + (1 - rr) * 0.45;
+      col.push(c.r * b, c.g * b, c.b * b);
     }
+    addPoints(pos, col, 0.72, 0.3, THREE.NormalBlending);
   }
-  const fgeo = bag.add(new THREE.BufferGeometry());
-  fgeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(fpos), 3));
-  fgeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(fcol), 3));
-  const fmat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.34, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
-  g.add(new THREE.Points(fgeo, fmat));
 
-  const coreMat = bag.add(new THREE.SpriteMaterial({ map: sprite, color: 0xead6ff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85 }));
-  const core = new THREE.Sprite(coreMat);
-  core.scale.setScalar(3);
-  g.add(core);
+  // 2. Filament cage — ADDITIVE, the bright fibrous web. Many short, tightly
+  //    curling strands; a red/pink belt through the middle, magenta web around.
+  {
+    const beltCols = [0xff3b44, 0xff4d63, 0xff6f93];
+    const webCols = [0xc94fd0, 0xe05fb4, 0x9b6fff, 0xff5fa8];
+    const strands = 520, perStrand = 130, step = 0.05;
+    const pos: number[] = [], col: number[] = [];
+    for (let s = 0; s < strands; s++) {
+      const belt = Math.random() < 0.4;
+      let p: THREE.Vector3;
+      if (belt) {
+        const a = Math.random() * Math.PI * 2, rr = 1.3 + Math.random() * 2.8;
+        p = new THREE.Vector3(Math.cos(a) * rr * SX, gauss() * 0.85, Math.sin(a) * rr * SZ);
+      } else {
+        const theta = Math.random() * Math.PI * 2, phi = Math.acos(2 * Math.random() - 1), rr = Math.pow(Math.random(), 0.45);
+        p = new THREE.Vector3(rr * Math.sin(phi) * Math.cos(theta) * RAD * SX, rr * Math.sin(phi) * Math.sin(theta) * RAD * SY, rr * Math.cos(phi) * RAD * SZ);
+      }
+      const pool = belt ? beltCols : webCols;
+      const baseC = new THREE.Color(pool[Math.floor(Math.random() * pool.length)]);
+      const strandBright = (belt ? 0.55 : 0.38) + Math.random() * 0.35; // some strands glow brighter
+      for (let i = 0; i < perStrand; i++) {
+        // High-frequency flow field => tight fibrous curls (not smooth ribbons)
+        const dir = new THREE.Vector3(
+          fbm3(p.x * 0.6, p.y * 0.6, p.z * 0.6 + 10) - 0.5,
+          fbm3(p.x * 0.6 + 20, p.y * 0.6, p.z * 0.6) - 0.5,
+          fbm3(p.x * 0.6, p.y * 0.6 + 30, p.z * 0.6) - 0.5,
+        ).normalize().multiplyScalar(step);
+        p = p.clone().add(dir);
+        const rad = ovoidR(p.x, p.y, p.z);
+        if (rad > 1.08) break;
+        const b = strandBright * (1 - rad * 0.3);
+        pos.push(p.x, p.y, p.z);
+        col.push(baseC.r * b, baseC.g * b, baseC.b * b);
+      }
+    }
+    addPoints(pos, col, 0.13, 0.5, THREE.AdditiveBlending);
+  }
+
+  // 3. Faint outer fibrous dust shell — NORMAL blending, violet.
+  {
+    const target = 7000;
+    const pos: number[] = [], col: number[] = [];
+    const c0 = new THREE.Color(0x6a4fc0);
+    let guard = 0;
+    while (pos.length / 3 < target && guard < target * 8) {
+      guard++;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const rr = 0.82 + Math.random() * 0.32;
+      const x = rr * Math.sin(phi) * Math.cos(theta) * RAD * SX;
+      const y = rr * Math.sin(phi) * Math.sin(theta) * RAD * SY;
+      const z = rr * Math.cos(phi) * RAD * SZ;
+      const dens = fbm3(x * 0.35 + 5, y * 0.35, z * 0.35);
+      if (dens < 0.5) continue;
+      pos.push(x, y, z);
+      const b = 0.35 + dens * 0.4;
+      col.push(c0.r * b, c0.g * b, c0.b * b);
+    }
+    addPoints(pos, col, 0.4, 0.18, THREE.NormalBlending);
+  }
+
+  // 4. Central pulsar — tiny bright point.
+  const pulsarMat = bag.add(new THREE.SpriteMaterial({ map: sprite, color: 0xc8e6ff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9 }));
+  const pulsar = new THREE.Sprite(pulsarMat);
+  pulsar.scale.setScalar(0.4);
+  g.add(pulsar);
 
   return (t) => {
-    g.rotation.y += 0.0004;
-    coreMat.opacity = 0.75 + Math.sin(t * 1.2) * 0.1;
+    g.rotation.y += 0.0003;
+    pulsarMat.opacity = 0.55 + Math.sin(t * 5.0) * 0.35;
   };
 }
 
@@ -533,6 +638,90 @@ function buildGalaxy(scene: THREE.Scene, bag: DisposalBag, sprite: THREE.Texture
   };
 }
 
+// Real NASA/CC equirectangular surface map wrapped on a lit sphere, with
+// optional clouds, atmosphere rim, Sun corona, and a particle ring.
+function buildTexturedBody(
+  scene: THREE.Scene,
+  bag: DisposalBag,
+  L: THREE.Vector3,
+  tex: TextureSet,
+  type: string,
+  sprite: THREE.Texture,
+): Update {
+  const loader = new THREE.TextureLoader();
+  const R = 2.2;
+  const map = bag.add(loader.load(tex.map));
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 4;
+
+  const geo = bag.add(new THREE.SphereGeometry(R, 120, 120));
+  const mat = bag.add(
+    tex.emissive
+      ? new THREE.MeshBasicMaterial({ map })
+      : new THREE.MeshStandardMaterial({ map, roughness: 1, metalness: 0 }),
+  );
+  const body = new THREE.Mesh(geo, mat);
+  scene.add(body);
+
+  let clouds: THREE.Mesh | null = null;
+  if (tex.clouds) {
+    const cmap = bag.add(loader.load(tex.clouds));
+    cmap.colorSpace = THREE.SRGBColorSpace;
+    const cgeo = bag.add(new THREE.SphereGeometry(R * 1.012, 96, 96));
+    const cmat = bag.add(new THREE.MeshStandardMaterial({ map: cmap, alphaMap: cmap, transparent: true, depthWrite: false }));
+    clouds = new THREE.Mesh(cgeo, cmat);
+    scene.add(clouds);
+  }
+
+  if (tex.atmosphere !== undefined) {
+    const ageo = bag.add(new THREE.SphereGeometry(R * 1.035, 64, 64));
+    const amat = bag.add(new THREE.ShaderMaterial({ uniforms: { uAtmo: { value: new THREE.Color(tex.atmosphere) }, uLightDir: { value: L } }, vertexShader: BODY_VERT, fragmentShader: ATMO_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    scene.add(new THREE.Mesh(ageo, amat));
+  }
+
+  if (tex.emissive) {
+    const coronaMat = bag.add(new THREE.SpriteMaterial({ map: sprite, color: 0xffd27a, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85 }));
+    const corona = new THREE.Sprite(coronaMat);
+    corona.scale.setScalar(R * 5.2);
+    scene.add(corona);
+  }
+
+  let ring: THREE.Points | null = null;
+  if (type === "ringed_planet") {
+    const count = 14000;
+    const inner = R * 1.35, outer = R * 2.4;
+    const pos = new Float32Array(count * 3);
+    const col = new Float32Array(count * 3);
+    const cIn = new THREE.Color(0xead8b0), cOut = new THREE.Color(0xb89a6a);
+    for (let i = 0; i < count; i++) {
+      const rr = inner + Math.random() * (outer - inner);
+      const f = (rr - inner) / (outer - inner);
+      const ang = Math.random() * Math.PI * 2;
+      const dens = 0.5 + 0.5 * Math.sin(f * 24);
+      pos[i * 3] = Math.cos(ang) * rr;
+      pos[i * 3 + 1] = (Math.random() - 0.5) * 0.03 * R;
+      pos[i * 3 + 2] = Math.sin(ang) * rr;
+      const c = cIn.clone().lerp(cOut, f);
+      const b = 0.5 + dens * 0.5;
+      col[i * 3] = c.r * b; col[i * 3 + 1] = c.g * b; col[i * 3 + 2] = c.b * b;
+    }
+    const rgeo = bag.add(new THREE.BufferGeometry());
+    rgeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    rgeo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    const rmat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.1, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+    ring = new THREE.Points(rgeo, rmat);
+    ring.rotation.x = Math.PI / 2.3;
+    ring.rotation.z = 0.2;
+    scene.add(ring);
+  }
+
+  return () => {
+    body.rotation.y += 0.0012;
+    if (clouds) clouds.rotation.y += 0.0016;
+    if (ring) ring.rotation.z += 0.0004;
+  };
+}
+
 const CAM_DIST: Record<string, number> = {
   planet: 7,
   ringed_planet: 8,
@@ -540,20 +729,20 @@ const CAM_DIST: Record<string, number> = {
   moon: 6.5,
   asteroid: 6.5,
   comet: 13,
-  nebula: 17,
+  nebula: 14,
   black_hole: 12,
   galaxy: 20,
 };
 
-export default function ExploreScene({ objectType }: ExploreSceneProps) {
+export default function ExploreScene({ objectType, objectName }: ExploreSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const pointerRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const type = objectType ?? "planet";
+    const name = (objectName ?? "").toLowerCase();
     const bag = new DisposalBag();
     const renderer = makeRenderer(canvas, 0x00010a);
     const scene = new THREE.Scene();
@@ -578,18 +767,30 @@ export default function ExploreScene({ objectType }: ExploreSceneProps) {
       planet: () => buildPlanet(scene, bag, L),
       ringed_planet: () => buildRinged(scene, bag, L, sprite),
       star: () => buildStar(scene, bag, sprite),
-      moon: () => buildMoon(scene, bag),
+      moon: () => buildMoon(scene, bag, L, name),
       asteroid: () => buildAsteroid(scene, bag),
       comet: () => buildComet(scene, bag, L, sprite),
       nebula: () => buildNebula(scene, bag, sprite),
       black_hole: () => buildBlackHole(scene, bag, sprite),
       galaxy: () => buildGalaxy(scene, bag, sprite),
     };
-    const update = (builders[type] ?? builders.planet)();
+    // Prefer a real surface map when we have one for this body; otherwise
+    // fall back to the procedural shader scene for the type.
+    const tex = textureFor(name);
+    const texturable = type === "planet" || type === "ringed_planet" || type === "moon" || type === "star";
+    const update = tex && texturable
+      ? buildTexturedBody(scene, bag, L, tex, type, sprite)
+      : (builders[type] ?? builders.planet)();
     const camDist = CAM_DIST[type] ?? 8;
 
-    const bright = type === "star" || type === "black_hole" || type === "nebula" || type === "galaxy";
-    const { composer, bloom } = makeBloomComposer(renderer, scene, camera, { strength: bright ? 0.85 : 0.55, radius: 0.75, threshold: 0.55 });
+    const BLOOM: Record<string, { strength: number; threshold: number }> = {
+      star: { strength: 0.7, threshold: 0.62 },
+      black_hole: { strength: 0.8, threshold: 0.5 },
+      galaxy: { strength: 0.5, threshold: 0.6 },
+      nebula: { strength: 0.3, threshold: 0.68 },
+    };
+    const bcfg = BLOOM[type] ?? { strength: 0.5, threshold: 0.62 };
+    const { composer, bloom } = makeBloomComposer(renderer, scene, camera, { strength: bcfg.strength, radius: 0.7, threshold: bcfg.threshold });
 
     const onResize = () => {
       const w = window.innerWidth, h = window.innerHeight;
@@ -602,14 +803,57 @@ export default function ExploreScene({ objectType }: ExploreSceneProps) {
     onResize();
     window.addEventListener("resize", onResize);
 
-    const onPointer = (e: PointerEvent) => {
-      pointerRef.current.x = (e.clientX / window.innerWidth) * 2 - 1;
-      pointerRef.current.y = (e.clientY / window.innerHeight) * 2 - 1;
+    // ── Interactive orbit: mouse drag, arrow keys, wheel zoom ───────────────
+    let az = 0;
+    let el = 0.12;
+    let dist = camDist;
+    const minDist = camDist * 0.5;
+    const maxDist = camDist * 2.4;
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    const pressed = new Set<string>();
+    const ARROWS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
+    const clampEl = (v: number) => Math.max(-1.4, Math.min(1.4, v));
+
+    canvas.style.cursor = "grab";
+    const onDown = (e: PointerEvent) => {
+      dragging = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      canvas.style.cursor = "grabbing";
     };
-    window.addEventListener("pointermove", onPointer);
+    const onMove = (e: PointerEvent) => {
+      if (!dragging) return;
+      az -= (e.clientX - lastX) * 0.005;
+      el = clampEl(el + (e.clientY - lastY) * 0.005);
+      lastX = e.clientX;
+      lastY = e.clientY;
+    };
+    const onUp = () => {
+      dragging = false;
+      canvas.style.cursor = "grab";
+    };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      dist = Math.max(minDist, Math.min(maxDist, dist + e.deltaY * 0.01));
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (ARROWS.has(e.key)) {
+        e.preventDefault();
+        pressed.add(e.key);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => pressed.delete(e.key);
+
+    canvas.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
 
     const clock = new THREE.Clock();
-    let theta = 0;
     let raf = 0;
     const animate = () => {
       raf = requestAnimationFrame(animate);
@@ -618,13 +862,16 @@ export default function ExploreScene({ objectType }: ExploreSceneProps) {
       far.rotation.y += 0.00002;
       near.rotation.y += 0.00004;
 
-      theta += 0.0009;
-      const az = theta + pointerRef.current.x * 0.5;
-      const el = 0.12 - pointerRef.current.y * 0.35;
+      if (pressed.has("ArrowLeft")) az -= 0.03;
+      if (pressed.has("ArrowRight")) az += 0.03;
+      if (pressed.has("ArrowUp")) el = clampEl(el + 0.025);
+      if (pressed.has("ArrowDown")) el = clampEl(el - 0.025);
+      if (!dragging && pressed.size === 0) az += 0.0008; // gentle idle auto-rotate
+
       camera.position.set(
-        Math.sin(az) * Math.cos(el) * camDist,
-        Math.sin(el) * camDist,
-        Math.cos(az) * Math.cos(el) * camDist,
+        Math.sin(az) * Math.cos(el) * dist,
+        Math.sin(el) * dist,
+        Math.cos(az) * Math.cos(el) * dist,
       );
       camera.lookAt(0, 0, 0);
       composer.render();
@@ -634,12 +881,17 @@ export default function ExploreScene({ objectType }: ExploreSceneProps) {
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
-      window.removeEventListener("pointermove", onPointer);
+      canvas.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("wheel", onWheel);
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
       composer.dispose();
       renderer.dispose();
       bag.disposeAll();
     };
-  }, [objectType]);
+  }, [objectType, objectName]);
 
   return <canvas ref={canvasRef} className="fixed inset-0 h-full w-full" style={{ zIndex: 0 }} />;
 }
