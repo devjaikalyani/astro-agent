@@ -59,6 +59,8 @@ interface ModelSelectorProps {
 export default function ModelSelector({ selected, onChange, disabled }: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const activeModel = MODELS.find((m) => m.id === selected) ?? MODELS[0];
 
   // Close on outside click
@@ -74,8 +76,17 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
     <div ref={ref} className="relative flex justify-center mb-5">
       {/* Trigger button */}
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => !disabled && setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" && !disabled) {
+            e.preventDefault();
+            setOpen(true);
+            requestAnimationFrame(() => optionRefs.current[0]?.focus());
+          }
+          if (e.key === "Escape") setOpen(false);
+        }}
         disabled={disabled}
         className={[
           "flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm transition-all duration-200",
@@ -87,7 +98,7 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
       >
         <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
         <span className="text-[#aaccff] font-medium">{activeModel.label}</span>
-        <span className="text-[#2a4a7a] text-xs">{activeModel.provider}</span>
+        <span className="font-hud text-[#5577aa] text-[10px]">{activeModel.provider}</span>
         {/* Chevron */}
         <svg
           className={`w-3.5 h-3.5 text-[#4466aa] transition-transform duration-200 ${open ? "rotate-180" : ""}`}
@@ -108,20 +119,33 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
         >
           {/* Header */}
           <div className="px-4 pt-4 pb-2">
-            <p className="text-[10px] text-[#2a4a7a] tracking-[0.3em] uppercase font-semibold">
+            <p className="font-hud text-[9px] text-[#5577aa] tracking-[0.35em] uppercase font-semibold">
               Select Model
             </p>
           </div>
 
           {/* Model list */}
           <div className="p-2 flex flex-col gap-1">
-            {MODELS.map((m) => {
+            {MODELS.map((m, idx) => {
               const isActive = m.id === selected;
               return (
                 <button
                   key={m.id}
+                  ref={(el) => { optionRefs.current[idx] = el; }}
                   type="button"
-                  onClick={() => { onChange(m.id); setOpen(false); }}
+                  onClick={() => { onChange(m.id); setOpen(false); triggerRef.current?.focus(); }}
+                  onKeyDown={(e) => {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      optionRefs.current[Math.min(idx + 1, MODELS.length - 1)]?.focus();
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      if (idx === 0) triggerRef.current?.focus();
+                      else optionRefs.current[idx - 1]?.focus();
+                    }
+                    if (e.key === "Escape") { setOpen(false); triggerRef.current?.focus(); }
+                  }}
                   className={[
                     "w-full text-left flex items-start gap-3 px-3 py-3 rounded-xl transition-all duration-150",
                     isActive
@@ -153,8 +177,8 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
                         </span>
                       )}
                     </div>
-                    <p className="text-[11px] text-[#3a5a8a] mt-0.5">{m.provider}</p>
-                    <p className={`text-xs mt-1 ${isActive ? "text-[#5577aa]" : "text-[#2a3a5a]"}`}>
+                    <p className="font-hud text-[10px] text-[#557799] mt-0.5">{m.provider}</p>
+                    <p className={`text-xs mt-1 ${isActive ? "text-[#6688aa]" : "text-[#4a5a7a]"}`}>
                       {m.description}
                     </p>
                   </div>
@@ -165,7 +189,7 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
 
           {/* Footer note */}
           <div className="px-4 py-3 border-t border-[rgba(26,111,255,0.1)]">
-            <p className="text-[10px] text-[#1a2a4a] text-center">
+            <p className="font-hud text-[9px] text-[#3a5577] text-center tracking-wide">
               Groq models are free · Claude requires Anthropic API key
             </p>
           </div>

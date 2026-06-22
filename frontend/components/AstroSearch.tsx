@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, KeyboardEvent } from "react";
+import { useState, KeyboardEvent } from "react";
 
 interface AstroSearchProps {
   onSubmit: (query: string) => void;
@@ -20,7 +20,6 @@ const SUGGESTIONS = [
 
 export default function AstroSearch({ onSubmit, isStreaming }: AstroSearchProps) {
   const [query, setQuery] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = () => {
     const trimmed = query.trim();
@@ -50,21 +49,20 @@ export default function AstroSearch({ onSubmit, isStreaming }: AstroSearchProps)
           </svg>
 
           <input
-            ref={inputRef}
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKey}
             placeholder="Ask about any celestial body in space..."
             disabled={isStreaming}
-            className="flex-1 bg-transparent text-[#e8eeff] placeholder-[#4466aa] text-base outline-none font-mono disabled:opacity-50"
+            className="font-hud flex-1 bg-transparent text-[#d8e8ff] placeholder-[#4a6a9a] text-[0.9rem] outline-none disabled:opacity-50"
             autoFocus
           />
 
           <button
             onClick={handleSubmit}
             disabled={!query.trim() || isStreaming}
-            className="shrink-0 flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900/40 disabled:text-blue-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition-all duration-200"
+            className="shrink-0 flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900/40 disabled:text-blue-700 text-white text-[0.8rem] font-semibold tracking-wide px-4 py-2 rounded-xl transition-all duration-200"
           >
             {isStreaming ? (
               <>
@@ -90,7 +88,7 @@ export default function AstroSearch({ onSubmit, isStreaming }: AstroSearchProps)
             <button
               key={s}
               onClick={() => handleSuggestion(s)}
-              className="text-xs text-[#6688bb] hover:text-[#aaccff] border border-[rgba(26,111,255,0.15)] hover:border-[rgba(26,111,255,0.4)] bg-[rgba(0,10,30,0.4)] hover:bg-[rgba(26,111,255,0.08)] px-3 py-1.5 rounded-full transition-all duration-200"
+              className="text-xs text-[#8baad6] hover:text-[#c0d8ff] border border-[rgba(26,111,255,0.28)] hover:border-[rgba(26,111,255,0.55)] bg-[rgba(0,10,30,0.55)] hover:bg-[rgba(26,111,255,0.12)] px-3 py-1.5 rounded-full transition-all duration-200"
             >
               {s}
             </button>

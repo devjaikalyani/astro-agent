@@ -139,6 +139,7 @@ export default function SpaceBackground({ objectType, hasContent }: SpaceBackgro
     const scene  = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
     camera.position.z = 22;
+    camera.lookAt(0, 1.2, 0);
 
     // ── THREE STAR LAYERS (depth parallax) ───────────────────────────────────
     const L1 = starLayer(13000, 860, 1100, 0.44, 0.78, 0.80, scene); // deep background
@@ -156,55 +157,81 @@ export default function SpaceBackground({ objectType, hasContent }: SpaceBackgro
     const N5 = nebulaCloud(1200,  580,  300, -500, 180, new THREE.Color(0x663399), 0.095, scene); // Pillars indigo
 
     // ── CENTRAL SPHERE ───────────────────────────────────────────────────────
+    const disposeList: Array<{ dispose(): void }> = [];
     const hexColor = OBJECT_COLORS[objectType || "planet"] ?? OBJECT_COLORS.planet;
     const color    = new THREE.Color(hexColor);
-    const sphereGeo = new THREE.SphereGeometry(2.2, 64, 64);
+    const sphereGeo = new THREE.SphereGeometry(1.8, 64, 64);
     let material: THREE.Material;
     if (objectType === "black_hole") {
       material = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.0, metalness: 1.0, emissive: new THREE.Color(0x330055), emissiveIntensity: 0.8 });
     } else if (objectType === "star") {
       material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.2, roughness: 0.6, metalness: 0.0 });
+    } else if (objectType === null) {
+      // Idle / home page — push past bloom threshold so the sphere glows beautifully
+      material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.75, roughness: 0.40, metalness: 0.18 });
     } else {
       material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.15, roughness: 0.7, metalness: 0.1 });
     }
+    disposeList.push(material);
     const sphere = new THREE.Mesh(sphereGeo, material);
     scene.add(sphere);
     sphereRef.current = sphere;
 
     // ── GLOW SHELL ───────────────────────────────────────────────────────────
-    const glowGeo = new THREE.SphereGeometry(2.9, 32, 32);
+    const glowGeo = new THREE.SphereGeometry(objectType === null ? 3.4 : 2.4, 32, 32);
     const glowMat = new THREE.MeshBasicMaterial({
       color: objectType === "black_hole" ? new THREE.Color(0x660099) : color,
-      transparent: true, opacity: objectType === "star" ? 0.18 : 0.07,
+      transparent: true, opacity: objectType === "star" ? 0.18 : objectType === null ? 0.24 : 0.07,
       blending: THREE.AdditiveBlending, side: THREE.FrontSide, depthWrite: false,
     });
+    disposeList.push(glowMat);
     const glow = new THREE.Mesh(glowGeo, glowMat);
     scene.add(glow);
     glowRef.current = glow;
 
     // ── OPTIONAL FEATURES PER TYPE ───────────────────────────────────────────
+    if (objectType === null) {
+      // Idle — a tilted cosmic ring gives the home sphere a planetary elegance
+      const idleRingGeo = new THREE.RingGeometry(2.8, 4.5, 80);
+      const idleRingMat = new THREE.MeshBasicMaterial({
+        color, side: THREE.DoubleSide, transparent: true, opacity: 0.15,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      const idleRing = new THREE.Mesh(idleRingGeo, idleRingMat);
+      idleRing.rotation.x = Math.PI / 3.2;
+      scene.add(idleRing);
+      disposeList.push(idleRingGeo, idleRingMat);
+    }
     if (objectType === "planet") {
       const ringGeo = new THREE.RingGeometry(3.0, 4.4, 64);
-      const ring    = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xc8a860, side: THREE.DoubleSide, transparent: true, opacity: 0.18 }));
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xc8a860, side: THREE.DoubleSide, transparent: true, opacity: 0.18 });
+      const ring    = new THREE.Mesh(ringGeo, ringMat);
       ring.rotation.x = Math.PI / 2.8;
       scene.add(ring);
       ringRef.current = ring;
+      disposeList.push(ringGeo, ringMat);
     }
     if (objectType === "black_hole") {
       const accGeo = new THREE.RingGeometry(2.8, 5.5, 128);
-      const acc = new THREE.Mesh(accGeo, new THREE.MeshBasicMaterial({ color: 0xff6600, side: THREE.DoubleSide, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+      const accMat = new THREE.MeshBasicMaterial({ color: 0xff6600, side: THREE.DoubleSide, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
+      const acc = new THREE.Mesh(accGeo, accMat);
       acc.rotation.x = Math.PI / 6;
       scene.add(acc);
       accretionRef.current = acc;
-      const inner = new THREE.Mesh(new THREE.RingGeometry(2.4, 3.0, 128), new THREE.MeshBasicMaterial({ color: 0xffaa22, side: THREE.DoubleSide, transparent: true, opacity: 0.70, blending: THREE.AdditiveBlending, depthWrite: false }));
+      const innerGeo = new THREE.RingGeometry(2.4, 3.0, 128);
+      const innerMat = new THREE.MeshBasicMaterial({ color: 0xffaa22, side: THREE.DoubleSide, transparent: true, opacity: 0.70, blending: THREE.AdditiveBlending, depthWrite: false });
+      const inner = new THREE.Mesh(innerGeo, innerMat);
       inner.rotation.x = Math.PI / 6;
       scene.add(inner);
+      disposeList.push(accGeo, accMat, innerGeo, innerMat);
     }
     if (objectType === "star") {
-      [3.2, 3.8, 4.6].forEach((r, i) => scene.add(new THREE.Mesh(
-        new THREE.RingGeometry(r, r + 0.18, 64),
-        new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.08 - i * 0.02, blending: THREE.AdditiveBlending, depthWrite: false }),
-      )));
+      [3.2, 3.8, 4.6].forEach((r, i) => {
+        const rGeo = new THREE.RingGeometry(r, r + 0.18, 64);
+        const rMat = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity: 0.08 - i * 0.02, blending: THREE.AdditiveBlending, depthWrite: false });
+        scene.add(new THREE.Mesh(rGeo, rMat));
+        disposeList.push(rGeo, rMat);
+      });
     }
 
     // ── LIGHTS ───────────────────────────────────────────────────────────────
@@ -292,6 +319,7 @@ export default function SpaceBackground({ objectType, hasContent }: SpaceBackgro
       N3.geo.dispose(); N3.mat.dispose();
       N4.geo.dispose(); N4.mat.dispose();
       N5.geo.dispose(); N5.mat.dispose();
+      disposeList.forEach((obj) => obj.dispose());
     };
   }, [objectType]);
 

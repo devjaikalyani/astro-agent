@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import AstroSearch from "@/components/AstroSearch";
 import ModelSelector, { MODELS } from "@/components/ModelSelector";
-import { useState } from "react";
 
 const SpaceBackground = dynamic(() => import("@/components/SpaceBackground"), {
   ssr: false,
@@ -16,59 +15,75 @@ export default function Home() {
   const [selectedModel, setSelectedModel] = useState("llama-3.3-70b-versatile");
   const activeModel = MODELS.find((m) => m.id === selectedModel);
 
-  const handleQuery = useCallback((query: string) => {
-    router.push(`/explore/${encodeURIComponent(query)}?model=${encodeURIComponent(selectedModel)}`);
-  }, [router, selectedModel]);
+  const handleQuery = useCallback(
+    (query: string) => {
+      router.push(
+        `/explore/${encodeURIComponent(query)}?model=${encodeURIComponent(selectedModel)}`,
+      );
+    },
+    [router, selectedModel],
+  );
 
   return (
     <main className="relative min-h-screen flex flex-col">
-      {/* Three.js canvas background — idle, sphere centered */}
       <SpaceBackground objectType={null} hasContent={false} />
 
-      {/* Overlay gradient */}
+      {/* Edge vignette — frames the scene */}
       <div
         className="fixed inset-0 pointer-events-none"
         style={{
-          background: "radial-gradient(ellipse at 50% 50%, transparent 30%, rgba(0,0,15,0.6) 100%)",
+          background:
+            "radial-gradient(ellipse at 50% 62%, transparent 22%, rgba(0,0,15,0.70) 100%)",
+          zIndex: 1,
+        }}
+      />
+
+      {/* Stage light — darkens center behind content so text always reads cleanly */}
+      <div
+        className="fixed inset-0 pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(ellipse 740px 520px at 50% 52%, rgba(0,4,20,0.62) 0%, transparent 100%)",
           zIndex: 1,
         }}
       />
 
       {/* Content */}
-      <div className="relative flex flex-col min-h-screen px-4 py-8 items-center justify-center" style={{ zIndex: 2 }}>
+      <div
+        className="relative w-full flex flex-col min-h-screen px-6 pb-16 justify-center"
+        style={{ zIndex: 2 }}
+      >
         {/* Header */}
-        <header className="text-center mb-10">
-          <div className="inline-flex items-center gap-3 mb-3">
-            <div className="w-8 h-0.5 bg-gradient-to-r from-transparent to-blue-500" />
-            <span className="text-xs tracking-[0.4em] text-blue-400 uppercase font-semibold">
+        <header className="w-full text-center mb-10 entry-0">
+          <div className="flex items-center justify-center gap-3 mb-5">
+            <div className="w-10 h-px bg-gradient-to-r from-transparent to-blue-500/50" />
+            <span className="font-hud text-[9px] tracking-[0.55em] text-blue-400/70 uppercase font-medium">
               Celestial Intelligence
             </span>
-            <div className="w-8 h-0.5 bg-gradient-to-l from-transparent to-blue-500" />
+            <div className="w-10 h-px bg-gradient-to-l from-transparent to-blue-500/50" />
           </div>
-          <h1 className="text-6xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-blue-400 to-purple-400 mb-2">
+          <h1 className="text-[5.5rem] leading-none font-bold tracking-[-0.03em] astro-title mb-4">
             ASTRO
           </h1>
-          <p className="text-[#4466aa] text-sm tracking-wide max-w-md mx-auto">
-            Explore every planet, star, nebula, black hole, and natural body in the universe
+          <p className="text-[#7a9ac8] text-[0.9rem] font-light max-w-xs mx-auto leading-relaxed tracking-wide">
+            Explore every planet, star, nebula,<br className="hidden sm:block" /> black hole, and natural body in the universe
           </p>
         </header>
 
         {/* Model selector */}
-        <ModelSelector
-          selected={selectedModel}
-          onChange={setSelectedModel}
-          disabled={false}
-        />
+        <div className="w-full flex justify-center entry-1">
+          <ModelSelector selected={selectedModel} onChange={setSelectedModel} />
+        </div>
 
         {/* Search */}
-        <div className="w-full mb-8">
+        <div className="w-full entry-2">
           <AstroSearch onSubmit={handleQuery} isStreaming={false} />
         </div>
 
         {/* Footer */}
-        <footer className="text-center mt-4">
-          <p className="text-[#2a3a5a] text-xs tracking-widest">
-            POWERED BY {activeModel?.label.toUpperCase() ?? "LLAMA 3.3 70B"} — {activeModel?.provider.toUpperCase() ?? "GROQ"}
+        <footer className="w-full text-center mt-6 entry-3">
+          <p className="font-hud text-[#3d5a85] text-[9px] tracking-[0.5em] uppercase">
+            Powered by {activeModel?.label ?? "Llama 3.3 70B"} &middot; {activeModel?.provider ?? "Groq"}
           </p>
         </footer>
       </div>

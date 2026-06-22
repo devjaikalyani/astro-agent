@@ -1,7 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  --font-sans: var(--font-space-grotesk), "Space Grotesk", system-ui, sans-serif;
+  --font-body: var(--font-outfit), "Outfit", system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), "JetBrains Mono", "Fira Code", monospace;
   --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
@@ -24,8 +26,18 @@ html,
 body {
   background: var(--space-bg);
   color: var(--text-primary);
-  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+  font-family: var(--font-space-grotesk), "Space Grotesk", system-ui, sans-serif;
   overflow-x: hidden;
+}
+
+/* Outfit for long-form reading content */
+.font-body {
+  font-family: var(--font-outfit), "Outfit", system-ui, sans-serif;
+}
+
+/* Monospace for HUD labels, data readouts, and terminal inputs */
+.font-hud {
+  font-family: var(--font-jetbrains), "JetBrains Mono", monospace;
 }
 
 /* Scrollbar */
@@ -42,31 +54,36 @@ body {
 
 /* Glow card */
 .glass-card {
-  background: rgba(0, 5, 20, 0.85);
-  backdrop-filter: blur(16px);
+  background: rgba(0, 5, 20, 0.90);
+  backdrop-filter: blur(24px);
   border: 1px solid var(--border-glow);
   box-shadow: 0 0 30px rgba(26, 111, 255, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 /* Markdown response */
+.astro-response {
+  font-family: var(--font-outfit), "Outfit", system-ui, sans-serif;
+  font-size: 0.9375rem;
+}
 .astro-response h1,
 .astro-response h2,
 .astro-response h3 {
+  font-family: var(--font-space-grotesk), "Space Grotesk", system-ui, sans-serif;
   color: #7ab8ff;
   margin-top: 1.25rem;
   margin-bottom: 0.5rem;
   font-weight: 600;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.01em;
 }
 .astro-response h3 {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
 }
 .astro-response h2 {
-  font-size: 1.2rem;
+  font-size: 1.15rem;
 }
 .astro-response p {
   color: #c8d8f0;
-  line-height: 1.75;
+  line-height: 1.8;
   margin-bottom: 0.75rem;
 }
 .astro-response strong {
@@ -161,4 +178,48 @@ body {
   background-size: cover;
   background-position: center;
   filter: brightness(0.75) saturate(1.2);
+}
+
+/* ── ASTRO title shimmer ───────────────────────────────────────────────── */
+@keyframes astro-shimmer {
+  0%   { background-position: 0% center; }
+  100% { background-position: 200% center; }
+}
+.astro-title {
+  background: linear-gradient(90deg, #67e8f9 0%, #60a5fa 28%, #c084fc 52%, #60a5fa 74%, #67e8f9 100%);
+  background-size: 200% auto;
+  animation: astro-shimmer 5s linear infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* ── Page entry animations ─────────────────────────────────────────────── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.entry-0 { animation: fade-up 0.65s cubic-bezier(0.22, 1, 0.36, 1) 0.04s both; }
+.entry-1 { animation: fade-up 0.65s cubic-bezier(0.22, 1, 0.36, 1) 0.18s both; }
+.entry-2 { animation: fade-up 0.65s cubic-bezier(0.22, 1, 0.36, 1) 0.32s both; }
+.entry-3 { animation: fade-up 0.65s cubic-bezier(0.22, 1, 0.36, 1) 0.46s both; }
+
+/* ── Drawer slide-in ───────────────────────────────────────────────────── */
+@keyframes slide-from-right {
+  from { transform: translateX(108%); }
+  to   { transform: translateX(0); }
+}
+.drawer-enter {
+  animation: slide-from-right 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* ── Analysis button attention pulse (runs 3×, then stops) ────────────── */
+@keyframes ring-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(26, 111, 255, 0.50); }
+  65%  { box-shadow: 0 0 0 12px rgba(26, 111, 255, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(26, 111, 255, 0); }
+}
+.ring-pulse {
+  animation: ring-pulse 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) 3;
 }

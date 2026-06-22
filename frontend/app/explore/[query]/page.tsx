@@ -160,25 +160,35 @@ function ExploreContent() {
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
         </svg>
-        <span className="font-semibold tracking-wider">ASTRO</span>
+        <span className="font-semibold tracking-[0.1em]">ASTRO</span>
       </button>
 
       {/* ── Scanning indicator ── */}
       {isStreaming && (
-        <div className="fixed top-6 right-6 z-20 flex items-center gap-2 px-4 py-2 rounded-xl bg-[rgba(0,5,20,0.65)] backdrop-blur-md border border-[rgba(26,111,255,0.15)]">
-          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-          <span className="text-xs text-[#4a6a9a] tracking-widest">SCANNING</span>
+        <div className="fixed top-6 right-6 z-20 flex items-center gap-2.5 px-4 py-2 rounded-xl bg-[rgba(0,5,20,0.78)] backdrop-blur-md border border-[rgba(26,111,255,0.18)]">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-55" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-400" />
+          </span>
+          <span className="font-hud text-[10px] text-[#7aacdd] tracking-[0.32em] font-medium">SCANNING</span>
         </div>
       )}
 
       {/* ── Object HUD — bottom center ── */}
-      <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-20 text-center pointer-events-none">
+      <div
+        className="fixed bottom-10 left-1/2 -translate-x-1/2 z-20 text-center pointer-events-none px-10 py-4 rounded-2xl entry-0"
+        style={{ background: "rgba(0,2,16,0.40)", backdropFilter: "blur(10px)" }}
+      >
         {displayType && (
-          <p className="text-[10px] tracking-[0.4em] text-[#2a4a7a] uppercase mb-2">
-            {displayType}
-          </p>
+          <div className="inline-flex items-center gap-2 mb-2.5">
+            <div className="w-5 h-px bg-gradient-to-r from-transparent to-blue-500/50" />
+            <span className="font-hud text-[9px] tracking-[0.5em] text-[#6688bb] uppercase font-medium">
+              {displayType}
+            </span>
+            <div className="w-5 h-px bg-gradient-to-l from-transparent to-blue-500/50" />
+          </div>
         )}
-        <h1 className="text-3xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-blue-300 to-purple-400">
+        <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-blue-300 to-purple-400">
           {displayName}
         </h1>
       </div>
@@ -187,8 +197,8 @@ function ExploreContent() {
       {responseText && !drawerOpen && (
         <button
           onClick={() => setDrawerOpen(true)}
-          className="fixed bottom-10 right-8 z-20 flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-semibold text-[#99bbee] border border-[rgba(26,111,255,0.25)] bg-[rgba(0,5,20,0.7)] backdrop-blur-md hover:border-[rgba(26,111,255,0.5)] hover:text-[#ccddff] transition-all duration-200"
-          style={{ boxShadow: "0 0 30px rgba(26,111,255,0.08)" }}
+          className="fixed bottom-10 right-8 z-20 flex items-center gap-2 px-5 py-2.5 rounded-2xl text-sm font-semibold text-[#aaccee] border border-[rgba(26,111,255,0.28)] bg-[rgba(0,5,20,0.78)] backdrop-blur-md hover:border-[rgba(26,111,255,0.55)] hover:text-[#cce0ff] hover:bg-[rgba(0,10,35,0.88)] transition-all duration-200 ring-pulse"
+          style={{ boxShadow: "0 0 30px rgba(26,111,255,0.12)" }}
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -208,7 +218,7 @@ function ExploreContent() {
 
           {/* Panel */}
           <div
-            className="fixed right-0 top-0 h-full z-40 flex flex-col"
+            className="fixed right-0 top-0 h-full z-40 flex flex-col drawer-enter"
             style={{
               width: "min(480px, 100vw)",
               background: "rgba(2, 4, 18, 0.97)",
@@ -224,7 +234,7 @@ function ExploreContent() {
                   {displayName}
                 </span>
                 {displayType && (
-                  <span className="text-[10px] text-[#2a4a7a] tracking-[0.25em] uppercase">
+                  <span className="text-[10px] text-[#5577aa] tracking-[0.25em] uppercase">
                     · {displayType}
                   </span>
                 )}
@@ -246,17 +256,22 @@ function ExploreContent() {
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{responseText}</ReactMarkdown>
                 </div>
               ) : (
-                <div className="flex items-center gap-3 text-sm text-[#4466aa] py-2">
-                  <span className="flex gap-1">
-                    {[0, 150, 300].map((d) => (
+                <div className="flex items-center gap-3 py-4">
+                  <span className="flex gap-1 items-end" style={{ height: "1.4rem" }}>
+                    {[0, 120, 240].map((d) => (
                       <span
                         key={d}
-                        className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-bounce"
-                        style={{ animationDelay: `${d}ms` }}
+                        className="w-[3px] rounded-full bg-blue-500/65 animate-bounce"
+                        style={{
+                          height: d === 120 ? "1.3rem" : "0.8rem",
+                          animationDelay: `${d}ms`,
+                        }}
                       />
                     ))}
                   </span>
-                  Consulting stellar database...
+                  <span className="text-sm text-[#6688bb] tracking-wide">
+                    Consulting stellar database
+                  </span>
                 </div>
               )}
             </div>

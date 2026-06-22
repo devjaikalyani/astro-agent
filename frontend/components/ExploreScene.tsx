@@ -18,7 +18,7 @@ interface ExploreSceneProps {
 const BLOOM: Record<string, [number, number, number]> = {
   black_hole:    [0.9, 0.5, 0.25],
   star:          [1.4, 0.6, 0.15],
-  nebula:        [1.1, 0.60, 0.32],
+  nebula:        [1.4, 0.70, 0.22],
   galaxy:        [0.7, 0.4, 0.15],
   comet:         [1.1, 0.5, 0.12],
   planet:        [0.3, 0.3, 0.40],
@@ -27,98 +27,38 @@ const BLOOM: Record<string, [number, number, number]> = {
   asteroid:      [0.2, 0.2, 0.50],
 };
 
-// ── Path A: GLSL procedural Crab Nebula (used when no NASA image is available) ──
-const NEBULA_VERT = `
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+// ── 3D value-noise helpers (used to sculpt the Crab Nebula's fibrous gas) ──
+function hash3(ix: number, iy: number, iz: number): number {
+  const h = Math.sin(ix * 127.1 + iy * 311.7 + iz * 74.7) * 43758.5453;
+  return h - Math.floor(h);
+}
+function vnoise3(x: number, y: number, z: number): number {
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  const fx = x - ix, fy = y - iy, fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const uz = fz * fz * (3 - 2 * fz);
+  const c000 = hash3(ix, iy, iz),       c100 = hash3(ix + 1, iy, iz);
+  const c010 = hash3(ix, iy + 1, iz),   c110 = hash3(ix + 1, iy + 1, iz);
+  const c001 = hash3(ix, iy, iz + 1),   c101 = hash3(ix + 1, iy, iz + 1);
+  const c011 = hash3(ix, iy + 1, iz + 1), c111 = hash3(ix + 1, iy + 1, iz + 1);
+  const x00 = c000 + (c100 - c000) * ux, x10 = c010 + (c110 - c010) * ux;
+  const x01 = c001 + (c101 - c001) * ux, x11 = c011 + (c111 - c011) * ux;
+  const y0 = x00 + (x10 - x00) * uy,     y1 = x01 + (x11 - x01) * uy;
+  return y0 + (y1 - y0) * uz;
+}
+function fbm3(x: number, y: number, z: number): number {
+  let v = 0, a = 0.5, f = 1;
+  for (let i = 0; i < 5; i++) {
+    v += a * vnoise3(x * f, y * f, z * f);
+    f *= 2.0; a *= 0.5;
   }
-`;
+  return v;
+}
 
-const NEBULA_FRAG = `
-  precision highp float;
-  uniform float uTime;
-  varying vec2 vUv;
-
-  float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-  }
-  float vnoise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(
-      mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
-      mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y
-    );
-  }
-  float fbm(vec2 p) {
-    float v = 0.0, a = 0.5;
-    for (int i = 0; i < 7; i++) {
-      v += a * vnoise(p);
-      p = mat2(1.6, 1.2, -1.2, 1.6) * p;
-      a *= 0.5;
-    }
-    return v;
-  }
-
-  void main() {
-    vec2 uv = vUv * 2.0 - 1.0;
-
-    // Slow internal rotation
-    float ang = uTime * 0.014;
-    uv = mat2(cos(ang), -sin(ang), sin(ang), cos(ang)) * uv;
-
-    // Oval boundary — Crab is slightly wider than tall
-    vec2 oval = vec2(uv.x / 1.10, uv.y / 0.96);
-    float r = length(oval);
-    float outerMask = smoothstep(0.95, 0.55, r);
-    if (outerMask < 0.004) discard;
-
-    // Domain-warped fBm cloud (gives filamentary, non-uniform texture)
-    float t = uTime * 0.005;
-    vec2 q = uv * 2.9;
-    vec2 warp = vec2(fbm(q + t), fbm(q + vec2(5.2, 1.3) + t * 0.8));
-    float cloud = fbm(q + 1.9 * warp + t * 0.6);
-
-    // Dark voids — two noise layers thresholded to create the cellular bubbly interior
-    float v1 = fbm(uv * 3.5 + vec2(1.1, 0.9) + t * 0.7);
-    float v2 = fbm(uv * 2.8 + vec2(-0.9, 1.6) + t * 0.5);
-    float voids = smoothstep(0.33, 0.58, (v1 + v2) * 0.5 + cloud * 0.12);
-
-    // Filaments — ridge noise: bright where two fbm values are nearly equal
-    vec2 fq = uv * 5.4 + t * 1.3;
-    float fa = fbm(fq);
-    float fb = fbm(fq + vec2(2.3, 1.9));
-    float filament = pow(max(0.0, 1.0 - abs(fa - fb) * 5.2), 4.5);
-    // S-curve weighting concentrates filaments along a diagonal band like the real Crab
-    float sCurve = exp(-7.0 * pow(uv.y - 0.28 * sin(uv.x * 2.5) - uv.x * 0.18, 2.0));
-    filament *= (0.18 + 0.82 * sCurve);
-
-    // Color palette
-    vec3 voidClr    = vec3(0.010, 0.004, 0.055);
-    vec3 deepPurple = vec3(0.130, 0.040, 0.500);
-    vec3 midPurple  = vec3(0.260, 0.090, 0.760);
-    vec3 blueViolet = vec3(0.200, 0.135, 0.840);
-    vec3 hotPink    = vec3(0.960, 0.175, 0.520);
-
-    vec3 color = mix(deepPurple, mix(midPurple, blueViolet, cloud), cloud);
-    color = mix(voidClr, color, voids);
-    // Blue outer haze
-    color = mix(color, blueViolet * 0.52, smoothstep(0.28, 0.90, r) * 0.38);
-    // Filaments
-    color += hotPink * filament * 0.92;
-
-    float alpha = cloud * voids * outerMask;
-    alpha = pow(alpha, 0.60);
-    alpha = clamp(alpha + filament * sCurve * 0.58, 0.0, 1.0) * outerMask;
-
-    gl_FragColor = vec4(color, alpha);
-  }
-`;
-
-// These types show the NASA photo as a full-screen CSS background
-const BG_TYPES = new Set(["galaxy", "nebula", "comet"]);
+// These types show the NASA photo as a full-screen CSS background.
+// (nebula is intentionally excluded — it is reimagined as a true 3D volume.)
+const BG_TYPES = new Set(["galaxy", "comet"]);
 
 // These types apply the NASA photo as a texture on the 3-D sphere
 const TEXTURE_TYPES = new Set(["planet", "moon", "asteroid"]);
@@ -197,6 +137,10 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
     fillLight.position.set(-9, -5, -8);
     scene.add(fillLight);
 
+    // ── Per-type scene ────────────────────────────────────────────────────────
+    let animFn: ((frame: number) => void) | null = null;
+    const disposeList: Array<{ dispose(): void }> = [];
+
     // ── Helper: apply NASA texture to a mesh material ─────────────────────────
     const applyNasaTexture = (mat: THREE.MeshStandardMaterial) => {
       if (!nasaImageUrl || disposed) return;
@@ -208,12 +152,9 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
         mat.color.set(0xffffff);
         mat.emissiveIntensity = 0.02;
         mat.needsUpdate = true;
+        disposeList.push(tex);
       });
     };
-
-    // ── Per-type scene ────────────────────────────────────────────────────────
-    let animFn: ((frame: number) => void) | null = null;
-    const disposeList: Array<{ dispose(): void }> = [];
 
     if (type === "black_hole") {
       const DISK_TILT = Math.PI / 2 - 0.08;
@@ -283,17 +224,28 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       scene.add(lensArc);
 
       // Subtle purple void glow around the horizon
-      scene.add(new THREE.Mesh(
+      const voidGlow = new THREE.Mesh(
         new THREE.SphereGeometry(4.2, 32, 32),
         new THREE.MeshBasicMaterial({
           color: 0x220033, transparent: true, opacity: 0.08,
           blending: THREE.AdditiveBlending, depthWrite: false,
         }),
-      ));
+      );
+      scene.add(voidGlow);
 
       const diskLight = new THREE.PointLight(0xff5500, 6, 25);
       diskLight.position.set(0, -1.5, 0);
       scene.add(diskLight);
+
+      disposeList.push(
+        sphere.geometry, sphere.material as THREE.Material,
+        photon.geometry, photon.material as THREE.Material,
+        inner.geometry, inner.material as THREE.Material,
+        mid.geometry, mid.material as THREE.Material,
+        outer.geometry, outer.material as THREE.Material,
+        lensArc.geometry, lensArc.material as THREE.Material,
+        voidGlow.geometry, voidGlow.material as THREE.Material,
+      );
 
       animFn = (frame) => {
         inner.rotation.z += 0.008;
@@ -323,18 +275,25 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       );
       scene.add(glowMesh);
 
-      const coronaRings: { mat: THREE.MeshBasicMaterial }[] = [];
+      const coronaRings: { mat: THREE.MeshBasicMaterial; geo: THREE.RingGeometry }[] = [];
       [5.2, 6.2, 7.3, 8.5, 9.8].forEach((r) => {
+        const geo = new THREE.RingGeometry(r, r + 0.3, 64);
         const mat = new THREE.MeshBasicMaterial({
           color, side: THREE.DoubleSide, transparent: true, opacity: 0.055,
           blending: THREE.AdditiveBlending, depthWrite: false,
         });
-        const mesh = new THREE.Mesh(new THREE.RingGeometry(r, r + 0.3, 64), mat);
+        const mesh = new THREE.Mesh(geo, mat);
         mesh.rotation.x = Math.random() * Math.PI;
         mesh.rotation.y = Math.random() * Math.PI;
         scene.add(mesh);
-        coronaRings.push({ mat });
+        coronaRings.push({ mat, geo });
       });
+
+      disposeList.push(
+        sphere.geometry, sphere.material as THREE.Material,
+        glowMesh.geometry, glowMesh.material as THREE.Material,
+      );
+      coronaRings.forEach(({ geo, mat }) => disposeList.push(geo, mat));
 
       const glowMatRef = glowMesh.material as THREE.MeshBasicMaterial;
       animFn = (frame) => {
@@ -346,84 +305,217 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       };
 
     } else if (type === "nebula") {
+      // ── True 3D volumetric Crab Nebula — structured from the NASA reference ──
+      // Three physically distinct components, all inside one orbit-able group:
+      //   (1) fibrous lavender outer envelope — supernova ejecta, voids & bays
+      //   (2) smooth electric-blue interior — pulsar-wind synchrotron glow
+      //   (3) bright magenta filament cage — ionised H/S strands draped over it
+      const group = new THREE.Group();
+      scene.add(group);
 
-      if (!showNasaBg) {
-        // ── PATH A: no NASA image — render procedural GLSL nebula ────────────
-        const nebMesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(16, 16),
-          new THREE.ShaderMaterial({
-            uniforms: { uTime: { value: 0.0 } },
-            vertexShader: NEBULA_VERT,
-            fragmentShader: NEBULA_FRAG,
-            transparent: true,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-          }),
-        );
-        scene.add(nebMesh);
-        disposeList.push(nebMesh.geometry, nebMesh.material as THREE.ShaderMaterial);
+      // Oblate envelope proportions (Crab is wider than tall)
+      const SX = 1.34, SY = 0.82, SZ = 1.0;
+      const R  = 8.4;                       // envelope radius
+      // Blue synchrotron region sits slightly up-and-right of centre
+      const blueCx = 0.6, blueCy = 0.7, blueCz = -0.3;
 
-        // Sparse outer particles for 3-D depth/parallax around the shader mesh
-        const spPos: number[] = [], spCol: number[] = [];
-        for (let i = 0; i < 2200; i++) {
-          const theta = Math.random() * Math.PI * 2;
-          const phi   = Math.acos(2 * Math.random() - 1);
-          const r     = 3.6 + Math.random() * 2.4;
-          spPos.push(r * Math.sin(phi) * Math.cos(theta) * 1.18,
-                     r * Math.sin(phi) * Math.sin(theta) * 0.86,
-                     r * Math.cos(phi) * 0.9);
-          const v = 0.30 + Math.random() * 0.40;
-          spCol.push(v * 0.28, v * 0.06, v * 0.88);
-        }
-        const spGeo = new THREE.BufferGeometry();
-        spGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(spPos), 3));
-        spGeo.setAttribute("color",    new THREE.BufferAttribute(new Float32Array(spCol), 3));
-        const spMat = new THREE.PointsMaterial({
-          size: 0.13, sizeAttenuation: true, transparent: true, opacity: 0.70,
-          vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false,
-        });
-        const spCloud = new THREE.Points(spGeo, spMat);
-        scene.add(spCloud);
-        disposeList.push(spGeo, spMat);
+      // ── (1) Fibrous outer envelope — density carved by domain-warped fBm ─────
+      const HAZE_N = 20000;
+      const hPos = new Float32Array(HAZE_N * 3);
+      const hCol = new Float32Array(HAZE_N * 3);
+      const lavender = new THREE.Color(0x8f7ce0);
+      const indigo   = new THREE.Color(0x2a1a78);
+      for (let i = 0; i < HAZE_N; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi   = Math.acos(2 * Math.random() - 1);
+        const rr    = Math.pow(Math.random(), 0.5);   // outer-biased
+        const x = R * rr * Math.sin(phi) * Math.cos(theta) * SX;
+        const y = R * rr * Math.sin(phi) * Math.sin(theta) * SY;
+        const z = R * rr * Math.cos(phi) * SZ;
+        hPos[i * 3] = x; hPos[i * 3 + 1] = y; hPos[i * 3 + 2] = z;
 
-        animFn = (frame) => {
-          nebMesh.lookAt(camera.position);
-          (nebMesh.material as THREE.ShaderMaterial).uniforms.uTime.value = frame * 0.016;
-          spCloud.rotation.y += 0.00030;
-          spCloud.rotation.z += 0.00010;
-          spMat.opacity = 0.65 + 0.08 * Math.sin(frame * 0.007);
-        };
+        // Domain-warped fBm → wispy, fibrous density with voids
+        const wx = fbm3(x * 0.22 + 11.0, y * 0.22, z * 0.22) - 0.5;
+        const wy = fbm3(x * 0.22, y * 0.22 + 7.0, z * 0.22) - 0.5;
+        const d  = fbm3(x * 0.30 + wx * 2.6, y * 0.30 + wy * 2.6, z * 0.30 + 5.0);
+        // Brighter in a mid-outer shell, fading at the very edge
+        const shell = 1.0 - Math.abs(rr - 0.74) * 1.3;
+        let bright = Math.pow(Math.max(0, d * Math.max(0.05, shell)), 2.2) * 2.6;
+        bright = Math.min(bright, 1.1);
 
-      } else {
-        // ── PATH B: NASA image is the primary visual ──────────────────────────
-        // Only add a faint outer particle halo for depth — the photo does the rest.
-        const spPos: number[] = [], spCol: number[] = [];
-        for (let i = 0; i < 1000; i++) {
-          const theta = Math.random() * Math.PI * 2;
-          const phi   = Math.acos(2 * Math.random() - 1);
-          const r     = 4.0 + Math.random() * 2.0;
-          spPos.push(r * Math.sin(phi) * Math.cos(theta) * 1.15,
-                     r * Math.sin(phi) * Math.sin(theta) * 0.82,
-                     r * Math.cos(phi) * 0.5);
-          const v = 0.45 + Math.random() * 0.35;
-          spCol.push(v * 0.26, v * 0.05, v * 0.90);
-        }
-        const spGeo = new THREE.BufferGeometry();
-        spGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(spPos), 3));
-        spGeo.setAttribute("color",    new THREE.BufferAttribute(new Float32Array(spCol), 3));
-        const spMat = new THREE.PointsMaterial({
-          size: 0.40, sizeAttenuation: true, transparent: true, opacity: 0.10,
-          vertexColors: true, blending: THREE.NormalBlending, depthWrite: false,
-        });
-        const spCloud = new THREE.Points(spGeo, spMat);
-        scene.add(spCloud);
-        disposeList.push(spGeo, spMat);
-
-        animFn = (frame) => {
-          spCloud.rotation.y += 0.00025;
-          spMat.opacity = 0.08 + 0.04 * Math.sin(frame * 0.006);
-        };
+        const c = indigo.clone().lerp(lavender, Math.min(1, d * 1.4));
+        hCol[i * 3]     = c.r * bright;
+        hCol[i * 3 + 1] = c.g * bright;
+        hCol[i * 3 + 2] = c.b * bright;
       }
+      const hazeGeo = new THREE.BufferGeometry();
+      hazeGeo.setAttribute("position", new THREE.BufferAttribute(hPos, 3));
+      hazeGeo.setAttribute("color",    new THREE.BufferAttribute(hCol, 3));
+      const hazeMat = new THREE.PointsMaterial({
+        size: 0.16, sizeAttenuation: true, vertexColors: true,
+        transparent: true, opacity: 0.85,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      const haze = new THREE.Points(hazeGeo, hazeMat);
+      group.add(haze);
+      disposeList.push(hazeGeo, hazeMat);
+
+      // ── (2) Blue synchrotron interior — smooth, centre-biased, offset blob ───
+      const BLUE_N = 7000;
+      const bPos = new Float32Array(BLUE_N * 3);
+      const bCol = new Float32Array(BLUE_N * 3);
+      const electric = new THREE.Color(0x6a5cff);
+      const skyblue  = new THREE.Color(0x9fb0ff);
+      for (let i = 0; i < BLUE_N; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi   = Math.acos(2 * Math.random() - 1);
+        const rr    = Math.pow(Math.random(), 1.6) * 5.0;   // centre-biased
+        const x = rr * Math.sin(phi) * Math.cos(theta) * 1.1 + blueCx;
+        const y = rr * Math.sin(phi) * Math.sin(theta) * 0.78 + blueCy;
+        const z = rr * Math.cos(phi) * 0.95 + blueCz;
+        bPos[i * 3] = x; bPos[i * 3 + 1] = y; bPos[i * 3 + 2] = z;
+
+        const t = rr / 5.0;
+        const c = skyblue.clone().lerp(electric, t);
+        // Gentle noise mottle, but stays smooth compared to the haze
+        const n = 0.55 + 0.45 * fbm3(x * 0.4, y * 0.4, z * 0.4);
+        const b = (1.0 - t * 0.5) * n * 0.85;
+        bCol[i * 3]     = c.r * b;
+        bCol[i * 3 + 1] = c.g * b;
+        bCol[i * 3 + 2] = c.b * b;
+      }
+      const blueGeo = new THREE.BufferGeometry();
+      blueGeo.setAttribute("position", new THREE.BufferAttribute(bPos, 3));
+      blueGeo.setAttribute("color",    new THREE.BufferAttribute(bCol, 3));
+      const blueMat = new THREE.PointsMaterial({
+        size: 0.18, sizeAttenuation: true, vertexColors: true,
+        transparent: true, opacity: 0.55,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      const blueCore = new THREE.Points(blueGeo, blueMat);
+      group.add(blueCore);
+      disposeList.push(blueGeo, blueMat);
+
+      // ── (3) Magenta filament cage — organic strands via noise-flow walk ──────
+      const fPos: number[] = [];
+      const fCol: number[] = [];
+      const STRANDS = 56;
+      for (let s = 0; s < STRANDS; s++) {
+        const isBand = s < 12;            // central bright zigzag band
+        // Strand start point
+        let px: number, py: number, pz: number;
+        if (isBand) {
+          px = (Math.random() - 0.5) * 11.0;
+          py = (Math.random() - 0.5) * 3.0;
+          pz = (Math.random() - 0.5) * 3.0;
+        } else {
+          const th = Math.random() * Math.PI * 2;
+          const ph = Math.acos(2 * Math.random() - 1);
+          const rr = 0.42 + Math.random() * 0.5;
+          px = R * rr * Math.sin(ph) * Math.cos(th) * SX;
+          py = R * rr * Math.sin(ph) * Math.sin(th) * SY;
+          pz = R * rr * Math.cos(ph) * SZ;
+        }
+        // Initial direction
+        let dx = Math.random() - 0.5, dy = Math.random() - 0.5, dz = Math.random() - 0.5;
+        let dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
+
+        const steps     = 130 + Math.floor(Math.random() * 90);
+        const stepLen   = 0.12;
+        const thickness = isBand ? 0.20 : 0.13;
+        const baseB     = isBand ? 1.25 : 0.62 + Math.random() * 0.45;
+
+        for (let st = 0; st < steps; st++) {
+          // Curl the heading with a smooth noise flow-field
+          const n1 = fbm3(px * 0.28 + s * 1.7, py * 0.28, pz * 0.28) - 0.5;
+          const n2 = fbm3(px * 0.28, py * 0.28 + s * 1.7, pz * 0.28) - 0.5;
+          const n3 = fbm3(px * 0.28, py * 0.28, pz * 0.28 + s * 1.7) - 0.5;
+          dx += n1 * 0.55; dy += n2 * 0.55; dz += n3 * 0.55;
+          if (isBand) dy -= py * 0.05;     // keep band near the equator
+          dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
+
+          px += dx * stepLen * 1.25;        // step wider in X
+          py += dy * stepLen;
+          pz += dz * stepLen;
+
+          // Contain inside the oblate envelope
+          const er = Math.hypot(px / SX, py / SY, pz / SZ);
+          if (er > R) { px *= 0.96; py *= 0.96; pz *= 0.96; }
+
+          // Lay down a small clump of bright points (gives the strand thickness)
+          for (let c = 0; c < 2; c++) {
+            fPos.push(
+              px + (Math.random() - 0.5) * thickness,
+              py + (Math.random() - 0.5) * thickness,
+              pz + (Math.random() - 0.5) * thickness,
+            );
+            const b = baseB * (0.55 + Math.random() * 0.6);
+            fCol.push(
+              Math.min(1.0, 1.0 * b),     // R — magenta core, clips toward white when bright
+              Math.min(1.0, 0.26 * b),    // G
+              Math.min(1.0, 0.58 * b),    // B
+            );
+          }
+        }
+      }
+      const filGeo = new THREE.BufferGeometry();
+      filGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(fPos), 3));
+      filGeo.setAttribute("color",    new THREE.BufferAttribute(new Float32Array(fCol), 3));
+      const filMat = new THREE.PointsMaterial({
+        size: 0.09, sizeAttenuation: true, vertexColors: true,
+        transparent: true, opacity: 0.9,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      const filaments = new THREE.Points(filGeo, filMat);
+      group.add(filaments);
+      disposeList.push(filGeo, filMat);
+
+      // ── Ambient volume shells — soft depth, no hard sphere edges ─────────────
+      [
+        { r: 8.2, hex: 0x140a48, op: 0.07 },   // outer indigo haze
+        { r: 4.6, hex: 0x3322a8, op: 0.08 },   // blue mid volume
+      ].forEach(({ r, hex, op }) => {
+        const sGeo = new THREE.SphereGeometry(r, 32, 32);
+        const sMat = new THREE.MeshBasicMaterial({
+          color: hex, transparent: true, opacity: op,
+          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
+        });
+        const mesh = new THREE.Mesh(sGeo, sMat);
+        mesh.scale.set(SX, SY, SZ);
+        group.add(mesh);
+        disposeList.push(sGeo, sMat);
+      });
+
+      // ── Pulsar — bright neutron-star core with a pulsing halo ────────────────
+      const pulsarGeo = new THREE.SphereGeometry(0.16, 16, 16);
+      const pulsarMat = new THREE.MeshBasicMaterial({ color: 0xdff6ff });
+      const pulsar    = new THREE.Mesh(pulsarGeo, pulsarMat);
+      pulsar.position.set(blueCx, blueCy, blueCz);
+      group.add(pulsar);
+
+      const haloGeo = new THREE.SphereGeometry(0.5, 16, 16);
+      const haloMat = new THREE.MeshBasicMaterial({
+        color: 0x8ce8ff, transparent: true, opacity: 0.4,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      const halo = new THREE.Mesh(haloGeo, haloMat);
+      halo.position.set(blueCx, blueCy, blueCz);
+      group.add(halo);
+      disposeList.push(pulsarGeo, pulsarMat, haloGeo, haloMat);
+
+      // Tilt — Crab as seen slightly off-axis from Earth
+      group.rotation.x =  0.16;
+      group.rotation.z = -0.06;
+
+      animFn = (frame) => {
+        group.rotation.y += 0.0004;
+        const pulse = Math.abs(Math.sin(frame * 0.11));   // ~Crab pulsar cadence
+        haloMat.opacity = 0.15 + 0.45 * pulse;
+        pulsarMat.color.setRGB(0.78 + 0.22 * pulse, 0.92 + 0.08 * pulse, 1.0);
+        hazeMat.opacity = 0.80 + 0.08 * Math.sin(frame * 0.006);
+        blueMat.opacity = 0.50 + 0.10 * Math.sin(frame * 0.008 + 0.7);
+        filMat.opacity  = 0.82 + 0.14 * Math.sin(frame * 0.010 + 1.1);
+      };
 
     } else if (type === "galaxy") {
       const count = 6000;
@@ -457,6 +549,7 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       const galaxy = new THREE.Points(geo, mat);
       galaxy.rotation.x = Math.PI / 6;
       scene.add(galaxy);
+      disposeList.push(geo, mat);
 
       if (!showNasaBg) {
         const core = new THREE.Mesh(
@@ -466,6 +559,7 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
           }),
         );
         scene.add(core);
+        disposeList.push(core.geometry, core.material as THREE.Material);
         animFn = (frame) => {
           galaxy.rotation.y += 0.0008;
           core.rotation.y += 0.003;
@@ -486,13 +580,18 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
 
       if (useNasaTexture) applyNasaTexture(mat);
 
-      scene.add(new THREE.Mesh(
+      const moonGlow = new THREE.Mesh(
         new THREE.SphereGeometry(3.5, 32, 32),
         new THREE.MeshBasicMaterial({
           color: 0xaabbcc, transparent: true, opacity: 0.04,
           blending: THREE.AdditiveBlending, depthWrite: false,
         }),
-      ));
+      );
+      scene.add(moonGlow);
+      disposeList.push(
+        sphere.geometry, mat,
+        moonGlow.geometry, moonGlow.material as THREE.Material,
+      );
 
       animFn = () => { sphere.rotation.y += 0.002; };
 
@@ -505,15 +604,14 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       );
       if (!showNasaBg) scene.add(sphere);
 
-      if (!showNasaBg) {
-        scene.add(new THREE.Mesh(
-          new THREE.SphereGeometry(4.2, 32, 32),
-          new THREE.MeshBasicMaterial({
-            color: 0x88ddff, transparent: true, opacity: 0.08,
-            blending: THREE.AdditiveBlending, depthWrite: false,
-          }),
-        ));
-      }
+      const coma = new THREE.Mesh(
+        new THREE.SphereGeometry(4.2, 32, 32),
+        new THREE.MeshBasicMaterial({
+          color: 0x88ddff, transparent: true, opacity: 0.08,
+          blending: THREE.AdditiveBlending, depthWrite: false,
+        }),
+      );
+      if (!showNasaBg) scene.add(coma);
 
       const tailCount = 2000;
       const tailPos = new Float32Array(tailCount * 3);
@@ -536,6 +634,11 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
         vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false,
       });
       scene.add(new THREE.Points(tailGeo, tailMat));
+      disposeList.push(
+        sphere.geometry, sphere.material as THREE.Material,
+        coma.geometry, coma.material as THREE.Material,
+        tailGeo, tailMat,
+      );
 
       animFn = () => { if (!showNasaBg) sphere.rotation.y += 0.004; };
 
@@ -556,6 +659,7 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       scene.add(sphere);
 
       if (useNasaTexture) applyNasaTexture(mat);
+      disposeList.push(geo, mat);
 
       animFn = () => {
         sphere.rotation.y += 0.013;
@@ -597,13 +701,22 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       ringOuter.rotation.x = Math.PI / 2.4;
       scene.add(ringOuter);
 
-      scene.add(new THREE.Mesh(
+      const rpGlow = new THREE.Mesh(
         new THREE.SphereGeometry(3.7, 32, 32),
         new THREE.MeshBasicMaterial({
           color, transparent: true, opacity: 0.06,
           blending: THREE.AdditiveBlending, depthWrite: false,
         }),
-      ));
+      );
+      scene.add(rpGlow);
+      disposeList.push(
+        sphere.geometry, mat,
+        gapRing.geometry, gapRing.material as THREE.Material,
+        ringB.geometry, ringB.material as THREE.Material,
+        ringA.geometry, ringA.material as THREE.Material,
+        ringOuter.geometry, ringOuter.material as THREE.Material,
+        rpGlow.geometry, rpGlow.material as THREE.Material,
+      );
 
       animFn = () => {
         sphere.rotation.y += 0.003;
@@ -625,20 +738,27 @@ export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneP
       if (useNasaTexture) applyNasaTexture(mat);
 
       // Atmospheric rim
-      scene.add(new THREE.Mesh(
+      const atmo1 = new THREE.Mesh(
         new THREE.SphereGeometry(3.55, 32, 32),
         new THREE.MeshBasicMaterial({
           color, transparent: true, opacity: 0.07,
           blending: THREE.AdditiveBlending, depthWrite: false,
         }),
-      ));
-      scene.add(new THREE.Mesh(
+      );
+      scene.add(atmo1);
+      const atmo2 = new THREE.Mesh(
         new THREE.SphereGeometry(4.1, 32, 32),
         new THREE.MeshBasicMaterial({
           color, transparent: true, opacity: 0.025,
           blending: THREE.AdditiveBlending, depthWrite: false,
         }),
-      ));
+      );
+      scene.add(atmo2);
+      disposeList.push(
+        sphere.geometry, mat,
+        atmo1.geometry, atmo1.material as THREE.Material,
+        atmo2.geometry, atmo2.material as THREE.Material,
+      );
 
       animFn = () => { sphere.rotation.y += 0.003; };
     }
