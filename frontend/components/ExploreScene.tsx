@@ -2,827 +2,644 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { ObjectType, OBJECT_COLORS } from "@/lib/types";
+import { ATMO_FRAG, BODY_VERT, SIMPLEX_3D } from "@/lib/glsl";
+import {
+  DisposalBag,
+  buildStarfield,
+  makeBloomComposer,
+  makeRenderer,
+  radialSprite,
+} from "@/lib/three-utils";
+import { ObjectType } from "@/lib/types";
 
 interface ExploreSceneProps {
   objectType: ObjectType;
-  nasaImageUrl?: string | null;
 }
 
-// Bloom [strength, radius, threshold] per type
-const BLOOM: Record<string, [number, number, number]> = {
-  black_hole:    [0.9, 0.5, 0.25],
-  star:          [1.4, 0.6, 0.15],
-  nebula:        [1.4, 0.70, 0.22],
-  galaxy:        [0.7, 0.4, 0.15],
-  comet:         [1.1, 0.5, 0.12],
-  planet:        [0.3, 0.3, 0.40],
-  ringed_planet: [0.4, 0.3, 0.35],
-  moon:          [0.2, 0.2, 0.50],
-  asteroid:      [0.2, 0.2, 0.50],
-};
+// ── Surface fragment shaders (paired with BODY_VERT) ───────────────────────
+const TERRA_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform vec3 uLightDir;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  ${SIMPLEX_3D}
+  void main() {
+    vec3 p = normalize(vLocal);
+    float cont = fbm(p * 1.8);
+    float detail = fbm(p * 5.5) * 0.5;
+    float h = cont + detail * 0.4;
+    float land = smoothstep(0.02, 0.12, h);
+    vec3 ocean = mix(vec3(0.01, 0.05, 0.16), vec3(0.03, 0.18, 0.36), smoothstep(-0.3, 0.12, h));
+    vec3 green = vec3(0.08, 0.24, 0.10);
+    vec3 rock = vec3(0.30, 0.24, 0.18);
+    vec3 sand = vec3(0.34, 0.30, 0.18);
+    vec3 landC = mix(green, rock, smoothstep(0.18, 0.5, h));
+    landC = mix(sand, landC, smoothstep(0.1, 0.22, h));
+    vec3 base = mix(ocean, landC, land);
+    float ice = smoothstep(0.74, 0.88, abs(p.y));
+    base = mix(base, vec3(0.92, 0.96, 1.0), ice);
 
-// ── 3D value-noise helpers (used to sculpt the Crab Nebula's fibrous gas) ──
-function hash3(ix: number, iy: number, iz: number): number {
-  const h = Math.sin(ix * 127.1 + iy * 311.7 + iz * 74.7) * 43758.5453;
-  return h - Math.floor(h);
+    vec3 N = normalize(vWorldN);
+    vec3 L = normalize(uLightDir);
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    float d = dot(N, L);
+    float day = smoothstep(-0.1, 0.6, d);
+    float term = exp(-pow(d * 3.0, 2.0));
+    vec3 col = base * (0.03 + day * 1.1);
+    vec3 H = normalize(L + V);
+    float spec = pow(max(dot(N, H), 0.0), 60.0) * (1.0 - land) * day;
+    col += vec3(0.6, 0.75, 0.9) * spec * 0.6;
+    col += vec3(0.1, 0.28, 0.55) * term * 0.4;
+    col += landC * smoothstep(0.1, -0.25, d) * 0.05;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const GAS_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform vec3 uLightDir;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  ${SIMPLEX_3D}
+  void main() {
+    vec3 p = normalize(vLocal);
+    float t = uTime * 0.02;
+    float warp = fbm(p * 1.5 + vec3(t, 0.0, 0.0));
+    float bands = sin(p.y * 11.0 + warp * 3.5);
+    float storms = ridged(p * 3.0 + vec3(t * 0.7, 0.0, t * 0.4));
+    vec3 c1 = vec3(0.32, 0.22, 0.12);
+    vec3 c2 = vec3(0.78, 0.62, 0.36);
+    vec3 c3 = vec3(0.96, 0.90, 0.72);
+    vec3 col = mix(c1, c2, smoothstep(-0.8, 0.8, bands));
+    col = mix(col, c3, smoothstep(0.55, 0.95, storms) * 0.7);
+
+    vec3 N = normalize(vWorldN);
+    float d = dot(N, normalize(uLightDir));
+    float day = smoothstep(-0.15, 0.65, d);
+    float term = exp(-pow(d * 3.2, 2.0));
+    vec3 lit = col * (0.05 + day * 1.1);
+    lit += vec3(0.5, 0.35, 0.15) * term * 0.4;
+    gl_FragColor = vec4(lit, 1.0);
+  }
+`;
+
+const STAR_FRAG = /* glsl */ `
+  uniform float uTime;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  ${SIMPLEX_3D}
+  void main() {
+    vec3 p = normalize(vLocal);
+    float t = uTime * 0.25;
+    float n = fbm(p * 3.0 + vec3(t, 0.0, 0.0));
+    float n2 = ridged(p * 6.0 - vec3(0.0, t, 0.0));
+    float gran = fbm(p * 16.0 + n * 1.5);
+    float heat = n * 0.5 + n2 * 0.4 + gran * 0.25;
+    vec3 cool = vec3(0.85, 0.18, 0.02);
+    vec3 mid = vec3(1.0, 0.55, 0.12);
+    vec3 hot = vec3(1.0, 0.94, 0.66);
+    vec3 col = mix(cool, mid, smoothstep(0.1, 0.5, heat));
+    col = mix(col, hot, smoothstep(0.5, 0.92, heat));
+    vec3 N = normalize(vWorldN);
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    float limb = pow(max(dot(N, V), 0.0), 0.5);
+    col *= 0.7 + 0.55 * limb;
+    col *= 2.2;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const CLOUD_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform vec3 uLightDir;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  ${SIMPLEX_3D}
+  void main() {
+    vec3 p = normalize(vLocal);
+    float c = fbm(p * 2.6 + vec3(uTime * 0.01, 0.0, 0.0));
+    float a = smoothstep(0.12, 0.5, c);
+    vec3 N = normalize(vWorldN);
+    float day = smoothstep(-0.05, 0.6, dot(N, normalize(uLightDir)));
+    gl_FragColor = vec4(vec3(1.0) * day, a * day * 0.85);
+  }
+`;
+
+// ── CPU value-noise for mesh displacement (rocky bodies) ───────────────────
+const fract = (x: number) => x - Math.floor(x);
+function h3(x: number, y: number, z: number): number {
+  return fract(Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453);
 }
-function vnoise3(x: number, y: number, z: number): number {
-  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
-  const fx = x - ix, fy = y - iy, fz = z - iz;
-  const ux = fx * fx * (3 - 2 * fx);
-  const uy = fy * fy * (3 - 2 * fy);
-  const uz = fz * fz * (3 - 2 * fz);
-  const c000 = hash3(ix, iy, iz),       c100 = hash3(ix + 1, iy, iz);
-  const c010 = hash3(ix, iy + 1, iz),   c110 = hash3(ix + 1, iy + 1, iz);
-  const c001 = hash3(ix, iy, iz + 1),   c101 = hash3(ix + 1, iy, iz + 1);
-  const c011 = hash3(ix, iy + 1, iz + 1), c111 = hash3(ix + 1, iy + 1, iz + 1);
-  const x00 = c000 + (c100 - c000) * ux, x10 = c010 + (c110 - c010) * ux;
-  const x01 = c001 + (c101 - c001) * ux, x11 = c011 + (c111 - c011) * ux;
-  const y0 = x00 + (x10 - x00) * uy,     y1 = x01 + (x11 - x01) * uy;
-  return y0 + (y1 - y0) * uz;
+function vnoise(x: number, y: number, z: number): number {
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  const xf = x - xi, yf = y - yi, zf = z - zi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf), w = zf * zf * (3 - 2 * zf);
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const c000 = h3(xi, yi, zi), c100 = h3(xi + 1, yi, zi), c010 = h3(xi, yi + 1, zi), c110 = h3(xi + 1, yi + 1, zi);
+  const c001 = h3(xi, yi, zi + 1), c101 = h3(xi + 1, yi, zi + 1), c011 = h3(xi, yi + 1, zi + 1), c111 = h3(xi + 1, yi + 1, zi + 1);
+  const x00 = lerp(c000, c100, u), x10 = lerp(c010, c110, u), x01 = lerp(c001, c101, u), x11 = lerp(c011, c111, u);
+  return lerp(lerp(x00, x10, v), lerp(x01, x11, v), w);
 }
 function fbm3(x: number, y: number, z: number): number {
-  let v = 0, a = 0.5, f = 1;
+  let f = 0, a = 0.5, fr = 1;
   for (let i = 0; i < 5; i++) {
-    v += a * vnoise3(x * f, y * f, z * f);
-    f *= 2.0; a *= 0.5;
+    f += a * vnoise(x * fr, y * fr, z * fr);
+    fr *= 2.0;
+    a *= 0.5;
   }
-  return v;
+  return f;
+}
+const gauss = () => Math.random() + Math.random() + Math.random() - 1.5;
+function smoothstep01(x: number, a: number, b: number): number {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
 }
 
-// These types show the NASA photo as a full-screen CSS background.
-// (nebula is intentionally excluded — it is reimagined as a true 3D volume.)
-const BG_TYPES = new Set(["galaxy", "comet"]);
+type Update = (t: number) => void;
 
-// These types apply the NASA photo as a texture on the 3-D sphere
-const TEXTURE_TYPES = new Set(["planet", "moon", "asteroid"]);
+// ── Per-type builders. Each adds objects to the scene and returns update(t). ─
+function buildPlanet(scene: THREE.Scene, bag: DisposalBag, L: THREE.Vector3): Update {
+  const R = 2.2;
+  const g = new THREE.Group();
+  scene.add(g);
+  const geo = bag.add(new THREE.SphereGeometry(R, 128, 128));
+  const mat = bag.add(new THREE.ShaderMaterial({ uniforms: { uTime: { value: 0 }, uLightDir: { value: L } }, vertexShader: BODY_VERT, fragmentShader: TERRA_FRAG }));
+  const planet = new THREE.Mesh(geo, mat);
+  planet.rotation.z = 0.3;
+  g.add(planet);
 
-export default function ExploreScene({ objectType, nasaImageUrl }: ExploreSceneProps) {
+  const cgeo = bag.add(new THREE.SphereGeometry(R * 1.02, 96, 96));
+  const cmat = bag.add(new THREE.ShaderMaterial({ uniforms: { uTime: { value: 0 }, uLightDir: { value: L } }, vertexShader: BODY_VERT, fragmentShader: CLOUD_FRAG, transparent: true, depthWrite: false }));
+  const clouds = new THREE.Mesh(cgeo, cmat);
+  clouds.rotation.z = 0.3;
+  g.add(clouds);
+
+  const ageo = bag.add(new THREE.SphereGeometry(R * 1.07, 64, 64));
+  const amat = bag.add(new THREE.ShaderMaterial({ uniforms: { uAtmo: { value: new THREE.Color(0x6fc0ff) }, uLightDir: { value: L } }, vertexShader: BODY_VERT, fragmentShader: ATMO_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  g.add(new THREE.Mesh(ageo, amat));
+
+  return (t) => {
+    mat.uniforms.uTime.value = t;
+    cmat.uniforms.uTime.value = t;
+    planet.rotation.y += 0.0015;
+    clouds.rotation.y += 0.0019;
+  };
+}
+
+function buildRinged(scene: THREE.Scene, bag: DisposalBag, L: THREE.Vector3, sprite: THREE.Texture): Update {
+  const R = 2.0;
+  const g = new THREE.Group();
+  g.rotation.z = 0.2;
+  scene.add(g);
+  const geo = bag.add(new THREE.SphereGeometry(R, 128, 128));
+  const mat = bag.add(new THREE.ShaderMaterial({ uniforms: { uTime: { value: 0 }, uLightDir: { value: L } }, vertexShader: BODY_VERT, fragmentShader: GAS_FRAG }));
+  const planet = new THREE.Mesh(geo, mat);
+  g.add(planet);
+
+  const ageo = bag.add(new THREE.SphereGeometry(R * 1.05, 64, 64));
+  const amat = bag.add(new THREE.ShaderMaterial({ uniforms: { uAtmo: { value: new THREE.Color(0xffcf8a) }, uLightDir: { value: L } }, vertexShader: BODY_VERT, fragmentShader: ATMO_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  g.add(new THREE.Mesh(ageo, amat));
+
+  const count = 16000;
+  const inner = R * 1.4, outer = R * 2.6;
+  const pos = new Float32Array(count * 3);
+  const col = new Float32Array(count * 3);
+  const cIn = new THREE.Color(0xfff0cf), cOut = new THREE.Color(0xcfa86a);
+  for (let i = 0; i < count; i++) {
+    const rr = inner + Math.random() * (outer - inner);
+    const f = (rr - inner) / (outer - inner);
+    const ang = Math.random() * Math.PI * 2;
+    const dens = 0.45 + 0.55 * Math.sin(f * 26.0);
+    pos[i * 3] = Math.cos(ang) * rr;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 0.04 * R;
+    pos[i * 3 + 2] = Math.sin(ang) * rr;
+    const c = cIn.clone().lerp(cOut, f);
+    const b = 0.45 + dens * 0.55;
+    col[i * 3] = c.r * b; col[i * 3 + 1] = c.g * b; col[i * 3 + 2] = c.b * b;
+  }
+  const rgeo = bag.add(new THREE.BufferGeometry());
+  rgeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  rgeo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  const rmat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.1, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const ring = new THREE.Points(rgeo, rmat);
+  ring.rotation.x = Math.PI / 2.4;
+  g.add(ring);
+
+  return (t) => {
+    mat.uniforms.uTime.value = t;
+    planet.rotation.y += 0.0014;
+    ring.rotation.z += 0.0005;
+  };
+}
+
+function buildStar(scene: THREE.Scene, bag: DisposalBag, sprite: THREE.Texture): Update {
+  const R = 2.4;
+  const geo = bag.add(new THREE.SphereGeometry(R, 128, 128));
+  const mat = bag.add(new THREE.ShaderMaterial({ uniforms: { uTime: { value: 0 } }, vertexShader: BODY_VERT, fragmentShader: STAR_FRAG }));
+  const star = new THREE.Mesh(geo, mat);
+  scene.add(star);
+
+  const coronaMat = bag.add(new THREE.SpriteMaterial({ map: sprite, color: 0xffd27a, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9 }));
+  const corona = new THREE.Sprite(coronaMat);
+  corona.scale.setScalar(R * 5.0);
+  scene.add(corona);
+
+  const count = 3000;
+  const pos = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = R * (1.0 + Math.random() * 0.6);
+    pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    pos[i * 3 + 2] = r * Math.cos(phi);
+  }
+  const fgeo = bag.add(new THREE.BufferGeometry());
+  fgeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const fmat = bag.add(new THREE.PointsMaterial({ map: sprite, color: 0xffae3a, size: 0.18, sizeAttenuation: true, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const flares = new THREE.Points(fgeo, fmat);
+  scene.add(flares);
+
+  return (t) => {
+    mat.uniforms.uTime.value = t;
+    star.rotation.y += 0.0009;
+    flares.rotation.y -= 0.0006;
+    const pulse = 1 + Math.sin(t * 1.5) * 0.04;
+    corona.scale.setScalar(R * 5.0 * pulse);
+    coronaMat.opacity = 0.8 + Math.sin(t * 2.0) * 0.1;
+  };
+}
+
+function displacedRock(R: number, detail: number, amp: number, elong: THREE.Vector3, color: number, bag: DisposalBag): THREE.Mesh {
+  const geo = bag.add(new THREE.IcosahedronGeometry(R, detail));
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const len = Math.hypot(x, y, z) || 1;
+    const nx = x / len, ny = y / len, nz = z / len;
+    const big = fbm3(nx * 1.6 + 5, ny * 1.6, nz * 1.6) - 0.5;
+    const crater = Math.pow(vnoise(nx * 4 + 11, ny * 4, nz * 4), 3.0);
+    const d = 1 + big * amp - crater * amp * 0.8;
+    pos.setXYZ(i, nx * R * d * elong.x, ny * R * d * elong.y, nz * R * d * elong.z);
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  const mat = bag.add(new THREE.MeshStandardMaterial({ color, roughness: 1.0, metalness: 0.0 }));
+  return new THREE.Mesh(geo, mat);
+}
+
+function buildMoon(scene: THREE.Scene, bag: DisposalBag): Update {
+  const moon = displacedRock(2.1, 5, 0.07, new THREE.Vector3(1, 1, 1), 0x9aa0a8, bag);
+  scene.add(moon);
+  return () => {
+    moon.rotation.y += 0.0008;
+  };
+}
+
+function buildAsteroid(scene: THREE.Scene, bag: DisposalBag): Update {
+  const rock = displacedRock(2.0, 4, 0.28, new THREE.Vector3(1.35, 0.85, 1.0), 0x7a6450, bag);
+  scene.add(rock);
+  const debris: THREE.Mesh[] = [];
+  for (let i = 0; i < 5; i++) {
+    const d = displacedRock(0.18 + Math.random() * 0.18, 2, 0.4, new THREE.Vector3(1.2, 0.9, 1), 0x6f5a47, bag);
+    const a = Math.random() * Math.PI * 2;
+    d.position.set(Math.cos(a) * 3.4, gauss() * 1.4, Math.sin(a) * 3.4);
+    scene.add(d);
+    debris.push(d);
+  }
+  return () => {
+    rock.rotation.y += 0.0016;
+    rock.rotation.x += 0.0006;
+    debris.forEach((d, i) => {
+      d.rotation.y += 0.01 + i * 0.002;
+      d.rotation.x += 0.008;
+    });
+  };
+}
+
+function buildComet(scene: THREE.Scene, bag: DisposalBag, L: THREE.Vector3, sprite: THREE.Texture): Update {
+  const away = L.clone().multiplyScalar(-1).normalize();
+  const perp = new THREE.Vector3(0, 1, 0).cross(away).normalize();
+  const nucleus = displacedRock(0.55, 3, 0.35, new THREE.Vector3(1.2, 0.9, 1), 0x8a8170, bag);
+  scene.add(nucleus);
+
+  const comaMat = bag.add(new THREE.SpriteMaterial({ map: sprite, color: 0x9fe6ff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.8 }));
+  const coma = new THREE.Sprite(comaMat);
+  coma.scale.setScalar(2.6);
+  scene.add(coma);
+
+  const makeTail = (count: number, length: number, spread: number, color: number, curve: number, size: number) => {
+    const pos = new Float32Array(count * 3);
+    const col = new Float32Array(count * 3);
+    const c = new THREE.Color(color);
+    for (let i = 0; i < count; i++) {
+      const f = Math.pow(Math.random(), 0.6);
+      const along = away.clone().multiplyScalar(f * length);
+      const side = perp.clone().multiplyScalar(gauss() * spread * (0.3 + f) + curve * f * f * length * 0.2);
+      const up = new THREE.Vector3(0, 1, 0).multiplyScalar(gauss() * spread * (0.3 + f));
+      const vv = along.add(side).add(up);
+      pos[i * 3] = vv.x; pos[i * 3 + 1] = vv.y; pos[i * 3 + 2] = vv.z;
+      const b = 1 - f * 0.85;
+      col[i * 3] = c.r * b; col[i * 3 + 1] = c.g * b; col[i * 3 + 2] = c.b * b;
+    }
+    const geo = bag.add(new THREE.BufferGeometry());
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    const mat = bag.add(new THREE.PointsMaterial({ map: sprite, size, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+    return pts;
+  };
+  const ionTail = makeTail(6000, 14, 0.25, 0x6fd0ff, 0.0, 0.16);
+  makeTail(5000, 9, 0.6, 0xffd9a0, 1.0, 0.2);
+
+  return (t) => {
+    nucleus.rotation.y += 0.004;
+    comaMat.opacity = 0.7 + Math.sin(t * 4.0) * 0.08;
+    (ionTail.material as THREE.PointsMaterial).opacity = 0.6 + Math.sin(t * 3.0) * 0.1;
+  };
+}
+
+function buildNebula(scene: THREE.Scene, bag: DisposalBag, sprite: THREE.Texture): Update {
+  const g = new THREE.Group();
+  scene.add(g);
+  const PALETTE = [0x8a3bd6, 0x3b6fd6, 0xd64f93, 0x3bd6c0];
+
+  const envCount = 22000;
+  const epos: number[] = [];
+  const ecol: number[] = [];
+  let guard = 0;
+  while (epos.length / 3 < envCount && guard < envCount * 6) {
+    guard++;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = 6 * Math.cbrt(Math.random());
+    const x = r * Math.sin(phi) * Math.cos(theta);
+    const y = r * Math.sin(phi) * Math.sin(theta) * 0.8;
+    const z = r * Math.cos(phi);
+    const density = fbm3(x * 0.35 + 3, y * 0.35, z * 0.35);
+    if (density < 0.45) continue;
+    epos.push(x, y, z);
+    const c = new THREE.Color(PALETTE[Math.floor(Math.random() * PALETTE.length)]);
+    const b = 0.4 + density * 0.6;
+    ecol.push(c.r * b, c.g * b, c.b * b);
+  }
+  const egeo = bag.add(new THREE.BufferGeometry());
+  egeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(epos), 3));
+  egeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(ecol), 3));
+  const emat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.5, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+  g.add(new THREE.Points(egeo, emat));
+
+  const strands = 60;
+  const perStrand = 220;
+  const fpos: number[] = [];
+  const fcol: number[] = [];
+  for (let s = 0; s < strands; s++) {
+    let p = new THREE.Vector3((Math.random() - 0.5) * 8, (Math.random() - 0.5) * 6, (Math.random() - 0.5) * 8);
+    const c = new THREE.Color(PALETTE[s % PALETTE.length]).lerp(new THREE.Color(0xffffff), 0.3);
+    for (let i = 0; i < perStrand; i++) {
+      const dir = new THREE.Vector3(
+        fbm3(p.x * 0.3, p.y * 0.3, p.z * 0.3 + 10) - 0.5,
+        fbm3(p.x * 0.3 + 20, p.y * 0.3, p.z * 0.3) - 0.5,
+        fbm3(p.x * 0.3, p.y * 0.3 + 30, p.z * 0.3) - 0.5,
+      ).normalize().multiplyScalar(0.16);
+      p = p.clone().add(dir);
+      if (p.length() > 7) break;
+      fpos.push(p.x, p.y, p.z);
+      fcol.push(c.r, c.g, c.b);
+    }
+  }
+  const fgeo = bag.add(new THREE.BufferGeometry());
+  fgeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(fpos), 3));
+  fgeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(fcol), 3));
+  const fmat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.34, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false }));
+  g.add(new THREE.Points(fgeo, fmat));
+
+  const coreMat = bag.add(new THREE.SpriteMaterial({ map: sprite, color: 0xead6ff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85 }));
+  const core = new THREE.Sprite(coreMat);
+  core.scale.setScalar(3);
+  g.add(core);
+
+  return (t) => {
+    g.rotation.y += 0.0004;
+    coreMat.opacity = 0.75 + Math.sin(t * 1.2) * 0.1;
+  };
+}
+
+function buildBlackHole(scene: THREE.Scene, bag: DisposalBag, sprite: THREE.Texture): Update {
+  const g = new THREE.Group();
+  g.rotation.x = 0.45;
+  scene.add(g);
+
+  const ehGeo = bag.add(new THREE.SphereGeometry(1.2, 64, 64));
+  const ehMat = bag.add(new THREE.MeshBasicMaterial({ color: 0x000000 }));
+  g.add(new THREE.Mesh(ehGeo, ehMat));
+
+  const prGeo = bag.add(new THREE.TorusGeometry(1.35, 0.04, 16, 128));
+  const prMat = bag.add(new THREE.MeshBasicMaterial({ color: 0xffe6b0, transparent: true, blending: THREE.AdditiveBlending }));
+  const photon = new THREE.Mesh(prGeo, prMat);
+  photon.rotation.x = Math.PI / 2;
+  g.add(photon);
+
+  const count = 24000;
+  const inner = 1.5, outer = 5.2;
+  const pos = new Float32Array(count * 3);
+  const col = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const f = Math.pow(Math.random(), 0.6);
+    const rr = inner + f * (outer - inner);
+    const ang = Math.random() * Math.PI * 2;
+    pos[i * 3] = Math.cos(ang) * rr;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 0.08 * rr;
+    pos[i * 3 + 2] = Math.sin(ang) * rr;
+    const beam = Math.cos(ang);
+    const heat = 1 - f;
+    const c = new THREE.Color().setHSL(0.58 - heat * 0.18 + beam * 0.05, 0.9, 0.5 + beam * 0.18 + heat * 0.15);
+    const b = 0.4 + heat * 0.6 + Math.max(beam, 0) * 0.4;
+    col[i * 3] = c.r * b; col[i * 3 + 1] = c.g * b; col[i * 3 + 2] = c.b * b;
+  }
+  const dgeo = bag.add(new THREE.BufferGeometry());
+  dgeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  dgeo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  const dmat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.11, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const disk = new THREE.Points(dgeo, dmat);
+  g.add(disk);
+
+  const jpos: number[] = [];
+  const jcol: number[] = [];
+  for (let i = 0; i < 2500; i++) {
+    const f = Math.random();
+    const sign = Math.random() < 0.5 ? 1 : -1;
+    const spread = 0.05 + f * 0.5;
+    jpos.push(gauss() * spread, sign * f * 7, gauss() * spread);
+    const c = new THREE.Color().setHSL(0.55, 0.9, 0.5 + (1 - f) * 0.3);
+    jcol.push(c.r, c.g, c.b);
+  }
+  const jgeo = bag.add(new THREE.BufferGeometry());
+  jgeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(jpos), 3));
+  jgeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(jcol), 3));
+  const jmat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.14, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+  g.add(new THREE.Points(jgeo, jmat));
+
+  return () => {
+    disk.rotation.y += 0.006;
+  };
+}
+
+function buildGalaxy(scene: THREE.Scene, bag: DisposalBag, sprite: THREE.Texture): Update {
+  const g = new THREE.Group();
+  g.rotation.x = 1.1;
+  scene.add(g);
+  const arms = 4;
+  const maxR = 8;
+  const count = 60000;
+  const pos = new Float32Array(count * 3);
+  const col = new Float32Array(count * 3);
+  const core = new THREE.Color(0xffe6a8);
+  const armC = new THREE.Color(0x6fa8ff);
+  const hii = new THREE.Color(0xff6fae);
+  for (let i = 0; i < count; i++) {
+    const r = Math.pow(Math.random(), 0.6) * maxR;
+    const arm = Math.floor(Math.random() * arms);
+    const spin = r * 0.55;
+    const spread = (1 - r / maxR) * 0.4 + 0.12;
+    const ang = (arm / arms) * Math.PI * 2 + spin + gauss() * spread;
+    pos[i * 3] = Math.cos(ang) * r + gauss() * 0.25;
+    pos[i * 3 + 1] = gauss() * (0.3 + 0.6 * Math.exp(-r * 0.4));
+    pos[i * 3 + 2] = Math.sin(ang) * r + gauss() * 0.25;
+    const f = r / maxR;
+    let c = core.clone().lerp(armC, smoothstep01(f, 0.05, 0.6));
+    if (Math.random() < 0.04 && f > 0.25) c = c.lerp(hii, 0.7);
+    const b = 0.5 + (1 - f) * 0.7;
+    col[i * 3] = c.r * b; col[i * 3 + 1] = c.g * b; col[i * 3 + 2] = c.b * b;
+  }
+  const geo = bag.add(new THREE.BufferGeometry());
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
+  const mat = bag.add(new THREE.PointsMaterial({ map: sprite, size: 0.12, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+  g.add(new THREE.Points(geo, mat));
+
+  const coreMat = bag.add(new THREE.SpriteMaterial({ map: sprite, color: 0xfff0cc, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.9 }));
+  const bulge = new THREE.Sprite(coreMat);
+  bulge.scale.setScalar(3.2);
+  g.add(bulge);
+
+  return () => {
+    g.rotation.z += 0.0006;
+  };
+}
+
+const CAM_DIST: Record<string, number> = {
+  planet: 7,
+  ringed_planet: 8,
+  star: 9,
+  moon: 6.5,
+  asteroid: 6.5,
+  comet: 13,
+  nebula: 17,
+  black_hole: 12,
+  galaxy: 20,
+};
+
+export default function ExploreScene({ objectType }: ExploreSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const pointerRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    let disposed = false;
-
     const type = objectType ?? "planet";
-    const hexColor = OBJECT_COLORS[type] ?? OBJECT_COLORS.planet;
-    const color = new THREE.Color(hexColor);
-    const [bloomStrength, bloomRadius, bloomThreshold] = BLOOM[type] ?? [0.6, 0.4, 0.2];
-    const showNasaBg = BG_TYPES.has(type) && !!nasaImageUrl;
-    const useNasaTexture = TEXTURE_TYPES.has(type) && !!nasaImageUrl;
-
-    // ── Renderer ──────────────────────────────────────────────────────────────
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: showNasaBg });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setClearColor(0x00000a, showNasaBg ? 0 : 1);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
-
+    const bag = new DisposalBag();
+    const renderer = makeRenderer(canvas, 0x00010a);
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
+    scene.fog = new THREE.FogExp2(0x00010a, 0.001);
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 4000);
 
-    // ── Camera ────────────────────────────────────────────────────────────────
-    if (type === "black_hole") {
-      camera.position.set(0, 7, 11);
-    } else if (type === "ringed_planet") {
-      camera.position.set(0, 5, 20);
-    } else {
-      camera.position.z = 18;
-    }
+    const far = buildStarfield(scene, bag, 9000, 700, 1100, 0.5, 0.7, 0.8);
+    const near = buildStarfield(scene, bag, 1800, 400, 700, 0.9, 0.85, 0.95);
 
-    // ── Orbit controls ────────────────────────────────────────────────────────
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enablePan = false;
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.06;
-    controls.minDistance = type === "black_hole" ? 14 : 8;
-    controls.maxDistance = type === "black_hole" ? 42 : 35;
+    const L = new THREE.Vector3(-0.55, 0.4, 0.75).normalize();
+    scene.add(new THREE.AmbientLight(0x223044, 0.7));
+    const key = new THREE.PointLight(0xfff2dc, 2.6, 0, 0);
+    key.position.copy(L.clone().multiplyScalar(40));
+    scene.add(key);
+    const rim = new THREE.PointLight(0x335588, 1.1, 0, 0);
+    rim.position.copy(L.clone().multiplyScalar(-30));
+    scene.add(rim);
 
-    // ── Star field ────────────────────────────────────────────────────────────
-    const starCount = 9000;
-    const starPos = new Float32Array(starCount * 3);
-    for (let i = 0; i < starCount; i++) {
-      const r = 400 + Math.random() * 700;
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      starPos[i * 3]     = r * Math.sin(phi) * Math.cos(theta);
-      starPos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-      starPos[i * 3 + 2] = r * Math.cos(phi);
-    }
-    const starGeo = new THREE.BufferGeometry();
-    starGeo.setAttribute("position", new THREE.BufferAttribute(starPos, 3));
-    const starMat = new THREE.PointsMaterial({
-      color: 0xffffff, size: 0.5, sizeAttenuation: true,
-      transparent: true,
-      opacity: showNasaBg ? 0.0 : (type === "black_hole" ? 0.55 : 0.9),
-    });
-    const stars = new THREE.Points(starGeo, starMat);
-    scene.add(stars);
+    const sprite = bag.add(radialSprite("rgba(255,255,255,0.95)", "rgba(255,255,255,0)"));
 
-    // ── Lights ────────────────────────────────────────────────────────────────
-    scene.add(new THREE.AmbientLight(0x111133, 2.0));
-    const keyLight = new THREE.PointLight(type === "black_hole" ? 0x660099 : color, 5, 80);
-    keyLight.position.set(7, 5, 10);
-    scene.add(keyLight);
-    const fillLight = new THREE.PointLight(0x2244aa, 2.5, 50);
-    fillLight.position.set(-9, -5, -8);
-    scene.add(fillLight);
-
-    // ── Per-type scene ────────────────────────────────────────────────────────
-    let animFn: ((frame: number) => void) | null = null;
-    const disposeList: Array<{ dispose(): void }> = [];
-
-    // ── Helper: apply NASA texture to a mesh material ─────────────────────────
-    const applyNasaTexture = (mat: THREE.MeshStandardMaterial) => {
-      if (!nasaImageUrl || disposed) return;
-      const loader = new THREE.TextureLoader();
-      loader.crossOrigin = "anonymous";
-      loader.load(nasaImageUrl, (tex) => {
-        if (disposed) { tex.dispose(); return; }
-        mat.map = tex;
-        mat.color.set(0xffffff);
-        mat.emissiveIntensity = 0.02;
-        mat.needsUpdate = true;
-        disposeList.push(tex);
-      });
+    const builders: Record<string, () => Update> = {
+      planet: () => buildPlanet(scene, bag, L),
+      ringed_planet: () => buildRinged(scene, bag, L, sprite),
+      star: () => buildStar(scene, bag, sprite),
+      moon: () => buildMoon(scene, bag),
+      asteroid: () => buildAsteroid(scene, bag),
+      comet: () => buildComet(scene, bag, L, sprite),
+      nebula: () => buildNebula(scene, bag, sprite),
+      black_hole: () => buildBlackHole(scene, bag, sprite),
+      galaxy: () => buildGalaxy(scene, bag, sprite),
     };
+    const update = (builders[type] ?? builders.planet)();
+    const camDist = CAM_DIST[type] ?? 8;
 
-    if (type === "black_hole") {
-      const DISK_TILT = Math.PI / 2 - 0.08;
+    const bright = type === "star" || type === "black_hole" || type === "nebula" || type === "galaxy";
+    const { composer, bloom } = makeBloomComposer(renderer, scene, camera, { strength: bright ? 0.85 : 0.55, radius: 0.75, threshold: 0.55 });
 
-      // Event horizon — large solid black sphere, rendered last so it cuts through disk
-      const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(3.2, 64, 64),
-        new THREE.MeshBasicMaterial({ color: 0x000000 }),
-      );
-      sphere.renderOrder = 10;
-      scene.add(sphere);
-
-      // Photon sphere ring — paper-thin bright halo
-      const photon = new THREE.Mesh(
-        new THREE.RingGeometry(3.22, 3.42, 256),
-        new THREE.MeshBasicMaterial({
-          color: 0xfff0dd, side: THREE.DoubleSide, transparent: true,
-          opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      photon.rotation.x = DISK_TILT;
-      scene.add(photon);
-
-      // Inner accretion — white-hot core (brightest, most intense)
-      const inner = new THREE.Mesh(
-        new THREE.RingGeometry(3.4, 5.2, 256),
-        new THREE.MeshBasicMaterial({
-          color: 0xffeecc, side: THREE.DoubleSide, transparent: true,
-          opacity: 0.88, blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      inner.rotation.x = DISK_TILT;
-      scene.add(inner);
-
-      // Mid ring — orange transition
-      const mid = new THREE.Mesh(
-        new THREE.RingGeometry(5.2, 8.0, 256),
-        new THREE.MeshBasicMaterial({
-          color: 0xff5500, side: THREE.DoubleSide, transparent: true,
-          opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      mid.rotation.x = DISK_TILT;
-      scene.add(mid);
-
-      // Outer ring — dark red fade
-      const outer = new THREE.Mesh(
-        new THREE.RingGeometry(8.0, 12.0, 256),
-        new THREE.MeshBasicMaterial({
-          color: 0xaa1500, side: THREE.DoubleSide, transparent: true,
-          opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      outer.rotation.x = DISK_TILT;
-      scene.add(outer);
-
-      // Gravitational lensing arc above the horizon
-      const lensArc = new THREE.Mesh(
-        new THREE.RingGeometry(3.3, 4.6, 256),
-        new THREE.MeshBasicMaterial({
-          color: 0xffddaa, side: THREE.DoubleSide, transparent: true,
-          opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      lensArc.rotation.x = Math.PI / 2 + 0.08;
-      lensArc.position.y = 0.5;
-      scene.add(lensArc);
-
-      // Subtle purple void glow around the horizon
-      const voidGlow = new THREE.Mesh(
-        new THREE.SphereGeometry(4.2, 32, 32),
-        new THREE.MeshBasicMaterial({
-          color: 0x220033, transparent: true, opacity: 0.08,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      scene.add(voidGlow);
-
-      const diskLight = new THREE.PointLight(0xff5500, 6, 25);
-      diskLight.position.set(0, -1.5, 0);
-      scene.add(diskLight);
-
-      disposeList.push(
-        sphere.geometry, sphere.material as THREE.Material,
-        photon.geometry, photon.material as THREE.Material,
-        inner.geometry, inner.material as THREE.Material,
-        mid.geometry, mid.material as THREE.Material,
-        outer.geometry, outer.material as THREE.Material,
-        lensArc.geometry, lensArc.material as THREE.Material,
-        voidGlow.geometry, voidGlow.material as THREE.Material,
-      );
-
-      animFn = (frame) => {
-        inner.rotation.z += 0.008;
-        mid.rotation.z  += 0.003;
-        outer.rotation.z += 0.0015;
-        photon.rotation.z += 0.014;
-        const lm = lensArc.material as THREE.MeshBasicMaterial;
-        lm.opacity = 0.35 + 0.12 * Math.sin(frame * 0.02);
-      };
-
-    } else if (type === "star") {
-      const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(4.2, 64, 64),
-        new THREE.MeshStandardMaterial({
-          color, emissive: color, emissiveIntensity: 1.6, roughness: 0.8, metalness: 0.0,
-        }),
-      );
-      scene.add(sphere);
-      scene.add(new THREE.PointLight(color, 7, 100));
-
-      const glowMesh = new THREE.Mesh(
-        new THREE.SphereGeometry(6.0, 32, 32),
-        new THREE.MeshBasicMaterial({
-          color, transparent: true, opacity: 0.14,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      scene.add(glowMesh);
-
-      const coronaRings: { mat: THREE.MeshBasicMaterial; geo: THREE.RingGeometry }[] = [];
-      [5.2, 6.2, 7.3, 8.5, 9.8].forEach((r) => {
-        const geo = new THREE.RingGeometry(r, r + 0.3, 64);
-        const mat = new THREE.MeshBasicMaterial({
-          color, side: THREE.DoubleSide, transparent: true, opacity: 0.055,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.rotation.x = Math.random() * Math.PI;
-        mesh.rotation.y = Math.random() * Math.PI;
-        scene.add(mesh);
-        coronaRings.push({ mat, geo });
-      });
-
-      disposeList.push(
-        sphere.geometry, sphere.material as THREE.Material,
-        glowMesh.geometry, glowMesh.material as THREE.Material,
-      );
-      coronaRings.forEach(({ geo, mat }) => disposeList.push(geo, mat));
-
-      const glowMatRef = glowMesh.material as THREE.MeshBasicMaterial;
-      animFn = (frame) => {
-        sphere.rotation.y += 0.007;
-        glowMatRef.opacity = 0.10 + 0.07 * Math.sin(frame * 0.025);
-        coronaRings.forEach(({ mat }, i) => {
-          mat.opacity = 0.035 + 0.035 * Math.sin(frame * 0.018 + i * 1.2);
-        });
-      };
-
-    } else if (type === "nebula") {
-      // ── True 3D volumetric Crab Nebula — structured from the NASA reference ──
-      // Three physically distinct components, all inside one orbit-able group:
-      //   (1) fibrous lavender outer envelope — supernova ejecta, voids & bays
-      //   (2) smooth electric-blue interior — pulsar-wind synchrotron glow
-      //   (3) bright magenta filament cage — ionised H/S strands draped over it
-      const group = new THREE.Group();
-      scene.add(group);
-
-      // Oblate envelope proportions (Crab is wider than tall)
-      const SX = 1.34, SY = 0.82, SZ = 1.0;
-      const R  = 8.4;                       // envelope radius
-      // Blue synchrotron region sits slightly up-and-right of centre
-      const blueCx = 0.6, blueCy = 0.7, blueCz = -0.3;
-
-      // ── (1) Fibrous outer envelope — density carved by domain-warped fBm ─────
-      const HAZE_N = 20000;
-      const hPos = new Float32Array(HAZE_N * 3);
-      const hCol = new Float32Array(HAZE_N * 3);
-      const lavender = new THREE.Color(0x8f7ce0);
-      const indigo   = new THREE.Color(0x2a1a78);
-      for (let i = 0; i < HAZE_N; i++) {
-        const theta = Math.random() * Math.PI * 2;
-        const phi   = Math.acos(2 * Math.random() - 1);
-        const rr    = Math.pow(Math.random(), 0.5);   // outer-biased
-        const x = R * rr * Math.sin(phi) * Math.cos(theta) * SX;
-        const y = R * rr * Math.sin(phi) * Math.sin(theta) * SY;
-        const z = R * rr * Math.cos(phi) * SZ;
-        hPos[i * 3] = x; hPos[i * 3 + 1] = y; hPos[i * 3 + 2] = z;
-
-        // Domain-warped fBm → wispy, fibrous density with voids
-        const wx = fbm3(x * 0.22 + 11.0, y * 0.22, z * 0.22) - 0.5;
-        const wy = fbm3(x * 0.22, y * 0.22 + 7.0, z * 0.22) - 0.5;
-        const d  = fbm3(x * 0.30 + wx * 2.6, y * 0.30 + wy * 2.6, z * 0.30 + 5.0);
-        // Brighter in a mid-outer shell, fading at the very edge
-        const shell = 1.0 - Math.abs(rr - 0.74) * 1.3;
-        let bright = Math.pow(Math.max(0, d * Math.max(0.05, shell)), 2.2) * 2.6;
-        bright = Math.min(bright, 1.1);
-
-        const c = indigo.clone().lerp(lavender, Math.min(1, d * 1.4));
-        hCol[i * 3]     = c.r * bright;
-        hCol[i * 3 + 1] = c.g * bright;
-        hCol[i * 3 + 2] = c.b * bright;
-      }
-      const hazeGeo = new THREE.BufferGeometry();
-      hazeGeo.setAttribute("position", new THREE.BufferAttribute(hPos, 3));
-      hazeGeo.setAttribute("color",    new THREE.BufferAttribute(hCol, 3));
-      const hazeMat = new THREE.PointsMaterial({
-        size: 0.16, sizeAttenuation: true, vertexColors: true,
-        transparent: true, opacity: 0.85,
-        blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      const haze = new THREE.Points(hazeGeo, hazeMat);
-      group.add(haze);
-      disposeList.push(hazeGeo, hazeMat);
-
-      // ── (2) Blue synchrotron interior — smooth, centre-biased, offset blob ───
-      const BLUE_N = 7000;
-      const bPos = new Float32Array(BLUE_N * 3);
-      const bCol = new Float32Array(BLUE_N * 3);
-      const electric = new THREE.Color(0x6a5cff);
-      const skyblue  = new THREE.Color(0x9fb0ff);
-      for (let i = 0; i < BLUE_N; i++) {
-        const theta = Math.random() * Math.PI * 2;
-        const phi   = Math.acos(2 * Math.random() - 1);
-        const rr    = Math.pow(Math.random(), 1.6) * 5.0;   // centre-biased
-        const x = rr * Math.sin(phi) * Math.cos(theta) * 1.1 + blueCx;
-        const y = rr * Math.sin(phi) * Math.sin(theta) * 0.78 + blueCy;
-        const z = rr * Math.cos(phi) * 0.95 + blueCz;
-        bPos[i * 3] = x; bPos[i * 3 + 1] = y; bPos[i * 3 + 2] = z;
-
-        const t = rr / 5.0;
-        const c = skyblue.clone().lerp(electric, t);
-        // Gentle noise mottle, but stays smooth compared to the haze
-        const n = 0.55 + 0.45 * fbm3(x * 0.4, y * 0.4, z * 0.4);
-        const b = (1.0 - t * 0.5) * n * 0.85;
-        bCol[i * 3]     = c.r * b;
-        bCol[i * 3 + 1] = c.g * b;
-        bCol[i * 3 + 2] = c.b * b;
-      }
-      const blueGeo = new THREE.BufferGeometry();
-      blueGeo.setAttribute("position", new THREE.BufferAttribute(bPos, 3));
-      blueGeo.setAttribute("color",    new THREE.BufferAttribute(bCol, 3));
-      const blueMat = new THREE.PointsMaterial({
-        size: 0.18, sizeAttenuation: true, vertexColors: true,
-        transparent: true, opacity: 0.55,
-        blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      const blueCore = new THREE.Points(blueGeo, blueMat);
-      group.add(blueCore);
-      disposeList.push(blueGeo, blueMat);
-
-      // ── (3) Magenta filament cage — organic strands via noise-flow walk ──────
-      const fPos: number[] = [];
-      const fCol: number[] = [];
-      const STRANDS = 56;
-      for (let s = 0; s < STRANDS; s++) {
-        const isBand = s < 12;            // central bright zigzag band
-        // Strand start point
-        let px: number, py: number, pz: number;
-        if (isBand) {
-          px = (Math.random() - 0.5) * 11.0;
-          py = (Math.random() - 0.5) * 3.0;
-          pz = (Math.random() - 0.5) * 3.0;
-        } else {
-          const th = Math.random() * Math.PI * 2;
-          const ph = Math.acos(2 * Math.random() - 1);
-          const rr = 0.42 + Math.random() * 0.5;
-          px = R * rr * Math.sin(ph) * Math.cos(th) * SX;
-          py = R * rr * Math.sin(ph) * Math.sin(th) * SY;
-          pz = R * rr * Math.cos(ph) * SZ;
-        }
-        // Initial direction
-        let dx = Math.random() - 0.5, dy = Math.random() - 0.5, dz = Math.random() - 0.5;
-        let dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
-
-        const steps     = 130 + Math.floor(Math.random() * 90);
-        const stepLen   = 0.12;
-        const thickness = isBand ? 0.20 : 0.13;
-        const baseB     = isBand ? 1.25 : 0.62 + Math.random() * 0.45;
-
-        for (let st = 0; st < steps; st++) {
-          // Curl the heading with a smooth noise flow-field
-          const n1 = fbm3(px * 0.28 + s * 1.7, py * 0.28, pz * 0.28) - 0.5;
-          const n2 = fbm3(px * 0.28, py * 0.28 + s * 1.7, pz * 0.28) - 0.5;
-          const n3 = fbm3(px * 0.28, py * 0.28, pz * 0.28 + s * 1.7) - 0.5;
-          dx += n1 * 0.55; dy += n2 * 0.55; dz += n3 * 0.55;
-          if (isBand) dy -= py * 0.05;     // keep band near the equator
-          dl = Math.hypot(dx, dy, dz) || 1; dx /= dl; dy /= dl; dz /= dl;
-
-          px += dx * stepLen * 1.25;        // step wider in X
-          py += dy * stepLen;
-          pz += dz * stepLen;
-
-          // Contain inside the oblate envelope
-          const er = Math.hypot(px / SX, py / SY, pz / SZ);
-          if (er > R) { px *= 0.96; py *= 0.96; pz *= 0.96; }
-
-          // Lay down a small clump of bright points (gives the strand thickness)
-          for (let c = 0; c < 2; c++) {
-            fPos.push(
-              px + (Math.random() - 0.5) * thickness,
-              py + (Math.random() - 0.5) * thickness,
-              pz + (Math.random() - 0.5) * thickness,
-            );
-            const b = baseB * (0.55 + Math.random() * 0.6);
-            fCol.push(
-              Math.min(1.0, 1.0 * b),     // R — magenta core, clips toward white when bright
-              Math.min(1.0, 0.26 * b),    // G
-              Math.min(1.0, 0.58 * b),    // B
-            );
-          }
-        }
-      }
-      const filGeo = new THREE.BufferGeometry();
-      filGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(fPos), 3));
-      filGeo.setAttribute("color",    new THREE.BufferAttribute(new Float32Array(fCol), 3));
-      const filMat = new THREE.PointsMaterial({
-        size: 0.09, sizeAttenuation: true, vertexColors: true,
-        transparent: true, opacity: 0.9,
-        blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      const filaments = new THREE.Points(filGeo, filMat);
-      group.add(filaments);
-      disposeList.push(filGeo, filMat);
-
-      // ── Ambient volume shells — soft depth, no hard sphere edges ─────────────
-      [
-        { r: 8.2, hex: 0x140a48, op: 0.07 },   // outer indigo haze
-        { r: 4.6, hex: 0x3322a8, op: 0.08 },   // blue mid volume
-      ].forEach(({ r, hex, op }) => {
-        const sGeo = new THREE.SphereGeometry(r, 32, 32);
-        const sMat = new THREE.MeshBasicMaterial({
-          color: hex, transparent: true, opacity: op,
-          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide,
-        });
-        const mesh = new THREE.Mesh(sGeo, sMat);
-        mesh.scale.set(SX, SY, SZ);
-        group.add(mesh);
-        disposeList.push(sGeo, sMat);
-      });
-
-      // ── Pulsar — bright neutron-star core with a pulsing halo ────────────────
-      const pulsarGeo = new THREE.SphereGeometry(0.16, 16, 16);
-      const pulsarMat = new THREE.MeshBasicMaterial({ color: 0xdff6ff });
-      const pulsar    = new THREE.Mesh(pulsarGeo, pulsarMat);
-      pulsar.position.set(blueCx, blueCy, blueCz);
-      group.add(pulsar);
-
-      const haloGeo = new THREE.SphereGeometry(0.5, 16, 16);
-      const haloMat = new THREE.MeshBasicMaterial({
-        color: 0x8ce8ff, transparent: true, opacity: 0.4,
-        blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      const halo = new THREE.Mesh(haloGeo, haloMat);
-      halo.position.set(blueCx, blueCy, blueCz);
-      group.add(halo);
-      disposeList.push(pulsarGeo, pulsarMat, haloGeo, haloMat);
-
-      // Tilt — Crab as seen slightly off-axis from Earth
-      group.rotation.x =  0.16;
-      group.rotation.z = -0.06;
-
-      animFn = (frame) => {
-        group.rotation.y += 0.0004;
-        const pulse = Math.abs(Math.sin(frame * 0.11));   // ~Crab pulsar cadence
-        haloMat.opacity = 0.15 + 0.45 * pulse;
-        pulsarMat.color.setRGB(0.78 + 0.22 * pulse, 0.92 + 0.08 * pulse, 1.0);
-        hazeMat.opacity = 0.80 + 0.08 * Math.sin(frame * 0.006);
-        blueMat.opacity = 0.50 + 0.10 * Math.sin(frame * 0.008 + 0.7);
-        filMat.opacity  = 0.82 + 0.14 * Math.sin(frame * 0.010 + 1.1);
-      };
-
-    } else if (type === "galaxy") {
-      const count = 6000;
-      const pos = new Float32Array(count * 3);
-      const cols = new Float32Array(count * 3);
-      const palette = [
-        new THREE.Color(0xff9955), new THREE.Color(0xffddaa),
-        new THREE.Color(0x8899ff), new THREE.Color(0xffffff),
-        new THREE.Color(0xffcc88),
-      ];
-      for (let i = 0; i < count; i++) {
-        const arm = i % 3;
-        const t = Math.random();
-        const r = 0.4 + t * 10;
-        const angle = arm * (Math.PI * 2 / 3) + t * Math.PI * 1.6 + (Math.random() - 0.5) * 0.4;
-        pos[i * 3]     = r * Math.cos(angle) + (Math.random() - 0.5) * 0.9;
-        pos[i * 3 + 1] = (Math.random() - 0.5) * (r < 2 ? 2.0 : 0.4);
-        pos[i * 3 + 2] = r * Math.sin(angle) + (Math.random() - 0.5) * 0.9;
-        const c = palette[Math.floor(Math.random() * palette.length)];
-        const b = 1.0 - t * 0.55;
-        cols[i * 3] = c.r * b; cols[i * 3 + 1] = c.g * b; cols[i * 3 + 2] = c.b * b;
-      }
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-      geo.setAttribute("color", new THREE.BufferAttribute(cols, 3));
-      const mat = new THREE.PointsMaterial({
-        size: 0.14, sizeAttenuation: true, transparent: true,
-        opacity: showNasaBg ? 0.0 : 0.88, // hide procedural galaxy — real photo is better
-        vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      const galaxy = new THREE.Points(geo, mat);
-      galaxy.rotation.x = Math.PI / 6;
-      scene.add(galaxy);
-      disposeList.push(geo, mat);
-
-      if (!showNasaBg) {
-        const core = new THREE.Mesh(
-          new THREE.SphereGeometry(1.4, 32, 32),
-          new THREE.MeshStandardMaterial({
-            color: 0xff9955, emissive: new THREE.Color(0xff9955), emissiveIntensity: 1.2, roughness: 0.8,
-          }),
-        );
-        scene.add(core);
-        disposeList.push(core.geometry, core.material as THREE.Material);
-        animFn = (frame) => {
-          galaxy.rotation.y += 0.0008;
-          core.rotation.y += 0.003;
-          mat.opacity = 0.8 + 0.1 * Math.sin(frame * 0.012);
-        };
-      } else {
-        animFn = () => { galaxy.rotation.y += 0.0004; };
-      }
-
-    } else if (type === "moon") {
-      const mat = new THREE.MeshStandardMaterial({
-        color: useNasaTexture ? 0xffffff : 0x8899aa,
-        roughness: 0.92, metalness: 0.0,
-        emissive: new THREE.Color(0x1a2233), emissiveIntensity: useNasaTexture ? 0.02 : 0.15,
-      });
-      const sphere = new THREE.Mesh(new THREE.SphereGeometry(3.2, 64, 64), mat);
-      scene.add(sphere);
-
-      if (useNasaTexture) applyNasaTexture(mat);
-
-      const moonGlow = new THREE.Mesh(
-        new THREE.SphereGeometry(3.5, 32, 32),
-        new THREE.MeshBasicMaterial({
-          color: 0xaabbcc, transparent: true, opacity: 0.04,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      scene.add(moonGlow);
-      disposeList.push(
-        sphere.geometry, mat,
-        moonGlow.geometry, moonGlow.material as THREE.Material,
-      );
-
-      animFn = () => { sphere.rotation.y += 0.002; };
-
-    } else if (type === "comet") {
-      const sphere = new THREE.Mesh(
-        new THREE.SphereGeometry(2.6, 64, 64),
-        new THREE.MeshStandardMaterial({
-          color: 0x88ddff, emissive: new THREE.Color(0x88ddff), emissiveIntensity: 0.9, roughness: 0.5,
-        }),
-      );
-      if (!showNasaBg) scene.add(sphere);
-
-      const coma = new THREE.Mesh(
-        new THREE.SphereGeometry(4.2, 32, 32),
-        new THREE.MeshBasicMaterial({
-          color: 0x88ddff, transparent: true, opacity: 0.08,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      if (!showNasaBg) scene.add(coma);
-
-      const tailCount = 2000;
-      const tailPos = new Float32Array(tailCount * 3);
-      const tailCols = new Float32Array(tailCount * 3);
-      for (let i = 0; i < tailCount; i++) {
-        const t = Math.random();
-        const spread = t * 3.5;
-        tailPos[i * 3]     = -(t * 16 + 2.8) + (Math.random() - 0.5) * spread;
-        tailPos[i * 3 + 1] = (Math.random() - 0.5) * spread * 0.5;
-        tailPos[i * 3 + 2] = (Math.random() - 0.5) * spread * 0.5;
-        const b = 1 - t;
-        tailCols[i * 3] = 0.45 * b; tailCols[i * 3 + 1] = 0.85 * b; tailCols[i * 3 + 2] = b;
-      }
-      const tailGeo = new THREE.BufferGeometry();
-      tailGeo.setAttribute("position", new THREE.BufferAttribute(tailPos, 3));
-      tailGeo.setAttribute("color", new THREE.BufferAttribute(tailCols, 3));
-      const tailMat = new THREE.PointsMaterial({
-        size: 0.1, sizeAttenuation: true, transparent: true,
-        opacity: showNasaBg ? 0.4 : 0.7,
-        vertexColors: true, blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      scene.add(new THREE.Points(tailGeo, tailMat));
-      disposeList.push(
-        sphere.geometry, sphere.material as THREE.Material,
-        coma.geometry, coma.material as THREE.Material,
-        tailGeo, tailMat,
-      );
-
-      animFn = () => { if (!showNasaBg) sphere.rotation.y += 0.004; };
-
-    } else if (type === "asteroid") {
-      const geo = new THREE.SphereGeometry(3.0, 32, 32);
-      const posAttr = geo.getAttribute("position");
-      for (let i = 0; i < posAttr.count; i++) {
-        const noise = 0.65 + Math.random() * 0.7;
-        posAttr.setXYZ(i, posAttr.getX(i) * noise, posAttr.getY(i) * noise, posAttr.getZ(i) * noise);
-      }
-      geo.computeVertexNormals();
-      const mat = new THREE.MeshStandardMaterial({
-        color: useNasaTexture ? 0xffffff : 0xb8885a,
-        roughness: 0.95, metalness: 0.08,
-        emissive: new THREE.Color(0x1a0f00), emissiveIntensity: useNasaTexture ? 0.02 : 0.1,
-      });
-      const sphere = new THREE.Mesh(geo, mat);
-      scene.add(sphere);
-
-      if (useNasaTexture) applyNasaTexture(mat);
-      disposeList.push(geo, mat);
-
-      animFn = () => {
-        sphere.rotation.y += 0.013;
-        sphere.rotation.x += 0.005;
-      };
-
-    } else if (type === "ringed_planet") {
-      const mat = new THREE.MeshStandardMaterial({
-        color, emissive: color, emissiveIntensity: 0.18, roughness: 0.65, metalness: 0.05,
-      });
-      const sphere = new THREE.Mesh(new THREE.SphereGeometry(3.2, 64, 64), mat);
-      scene.add(sphere);
-
-      const gapRing = new THREE.Mesh(
-        new THREE.RingGeometry(3.7, 4.1, 128),
-        new THREE.MeshBasicMaterial({ color: 0x221a00, side: THREE.DoubleSide, transparent: true, opacity: 0.6 }),
-      );
-      gapRing.rotation.x = Math.PI / 2.4;
-      scene.add(gapRing);
-
-      const ringB = new THREE.Mesh(
-        new THREE.RingGeometry(4.1, 5.8, 128),
-        new THREE.MeshBasicMaterial({ color: 0xd4b06a, side: THREE.DoubleSide, transparent: true, opacity: 0.55 }),
-      );
-      ringB.rotation.x = Math.PI / 2.4;
-      scene.add(ringB);
-
-      const ringA = new THREE.Mesh(
-        new THREE.RingGeometry(5.9, 7.4, 128),
-        new THREE.MeshBasicMaterial({ color: 0xb8965a, side: THREE.DoubleSide, transparent: true, opacity: 0.38 }),
-      );
-      ringA.rotation.x = Math.PI / 2.4;
-      scene.add(ringA);
-
-      const ringOuter = new THREE.Mesh(
-        new THREE.RingGeometry(7.4, 8.8, 128),
-        new THREE.MeshBasicMaterial({ color: 0x997744, side: THREE.DoubleSide, transparent: true, opacity: 0.14 }),
-      );
-      ringOuter.rotation.x = Math.PI / 2.4;
-      scene.add(ringOuter);
-
-      const rpGlow = new THREE.Mesh(
-        new THREE.SphereGeometry(3.7, 32, 32),
-        new THREE.MeshBasicMaterial({
-          color, transparent: true, opacity: 0.06,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      scene.add(rpGlow);
-      disposeList.push(
-        sphere.geometry, mat,
-        gapRing.geometry, gapRing.material as THREE.Material,
-        ringB.geometry, ringB.material as THREE.Material,
-        ringA.geometry, ringA.material as THREE.Material,
-        ringOuter.geometry, ringOuter.material as THREE.Material,
-        rpGlow.geometry, rpGlow.material as THREE.Material,
-      );
-
-      animFn = () => {
-        sphere.rotation.y += 0.003;
-        ringB.rotation.z += 0.0005;
-        ringA.rotation.z += 0.0003;
-      };
-
-    } else {
-      // Generic planet — no rings
-      const mat = new THREE.MeshStandardMaterial({
-        color: useNasaTexture ? 0xffffff : color,
-        emissive: useNasaTexture ? new THREE.Color(0x000000) : color,
-        emissiveIntensity: useNasaTexture ? 0.0 : 0.1,
-        roughness: 0.72, metalness: 0.05,
-      });
-      const sphere = new THREE.Mesh(new THREE.SphereGeometry(3.2, 64, 64), mat);
-      scene.add(sphere);
-
-      if (useNasaTexture) applyNasaTexture(mat);
-
-      // Atmospheric rim
-      const atmo1 = new THREE.Mesh(
-        new THREE.SphereGeometry(3.55, 32, 32),
-        new THREE.MeshBasicMaterial({
-          color, transparent: true, opacity: 0.07,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      scene.add(atmo1);
-      const atmo2 = new THREE.Mesh(
-        new THREE.SphereGeometry(4.1, 32, 32),
-        new THREE.MeshBasicMaterial({
-          color, transparent: true, opacity: 0.025,
-          blending: THREE.AdditiveBlending, depthWrite: false,
-        }),
-      );
-      scene.add(atmo2);
-      disposeList.push(
-        sphere.geometry, mat,
-        atmo1.geometry, atmo1.material as THREE.Material,
-        atmo2.geometry, atmo2.material as THREE.Material,
-      );
-
-      animFn = () => { sphere.rotation.y += 0.003; };
-    }
-
-    // ── Postprocessing ────────────────────────────────────────────────────────
-    const composer = new EffectComposer(renderer);
-    composer.addPass(new RenderPass(scene, camera));
-    composer.addPass(new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight),
-      bloomStrength, bloomRadius, bloomThreshold,
-    ));
-    composer.addPass(new OutputPass());
-
-    // ── Resize ────────────────────────────────────────────────────────────────
     const onResize = () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      composer.setSize(window.innerWidth, window.innerHeight);
-      camera.aspect = window.innerWidth / window.innerHeight;
+      const w = window.innerWidth, h = window.innerHeight;
+      renderer.setSize(w, h);
+      composer.setSize(w, h);
+      bloom.setSize(w, h);
+      camera.aspect = w / h;
       camera.updateProjectionMatrix();
     };
+    onResize();
     window.addEventListener("resize", onResize);
 
-    // ── Animate ───────────────────────────────────────────────────────────────
-    let frame = 0;
-    let animId: number;
+    const onPointer = (e: PointerEvent) => {
+      pointerRef.current.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointerRef.current.y = (e.clientY / window.innerHeight) * 2 - 1;
+    };
+    window.addEventListener("pointermove", onPointer);
+
+    const clock = new THREE.Clock();
+    let theta = 0;
+    let raf = 0;
     const animate = () => {
-      animId = requestAnimationFrame(animate);
-      frame++;
-      controls.update();
-      stars.rotation.y += 0.00006;
-      stars.rotation.x += 0.00002;
-      if (animFn) animFn(frame);
+      raf = requestAnimationFrame(animate);
+      const t = clock.getElapsedTime();
+      update(t);
+      far.rotation.y += 0.00002;
+      near.rotation.y += 0.00004;
+
+      theta += 0.0009;
+      const az = theta + pointerRef.current.x * 0.5;
+      const el = 0.12 - pointerRef.current.y * 0.35;
+      camera.position.set(
+        Math.sin(az) * Math.cos(el) * camDist,
+        Math.sin(el) * camDist,
+        Math.cos(az) * Math.cos(el) * camDist,
+      );
+      camera.lookAt(0, 0, 0);
       composer.render();
     };
     animate();
 
     return () => {
-      disposed = true;
-      cancelAnimationFrame(animId);
-      controls.dispose();
+      cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("pointermove", onPointer);
       composer.dispose();
       renderer.dispose();
-      starGeo.dispose();
-      starMat.dispose();
-      disposeList.forEach((obj) => obj.dispose());
+      bag.disposeAll();
     };
-  }, [objectType, nasaImageUrl]);
+  }, [objectType]);
 
-  const type = objectType ?? "planet";
-  const showNasaBg = BG_TYPES.has(type) && !!nasaImageUrl;
-
-  return (
-    <div className="fixed inset-0 z-0">
-      {showNasaBg && (
-        type === "nebula" ? (
-          <div className="absolute inset-0 overflow-hidden">
-            <div className="nebula-bg-spin" style={{ "--nasa-bg-url": `url(${nasaImageUrl})` } as React.CSSProperties} />
-          </div>
-        ) : (
-          <div className="nasa-bg-static" style={{ "--nasa-bg-url": `url(${nasaImageUrl})` } as React.CSSProperties} />
-        )
-      )}
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
-    </div>
-  );
+  return <canvas ref={canvasRef} className="fixed inset-0 h-full w-full" style={{ zIndex: 0 }} />;
 }

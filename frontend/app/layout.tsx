@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, Outfit, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -28,10 +28,16 @@ export const metadata: Metadata = {
   description: "AI-powered astronomical knowledge engine. Explore planets, stars, nebulae, black holes and everything in space.",
 };
 
+export const viewport: Viewport = {
+  themeColor: "#00010a",
+  width: "device-width",
+  initialScale: 1,
+};
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${spaceGrotesk.variable} ${outfit.variable} ${jetbrainsMono.variable}`}>
-      <body className="min-h-screen bg-[#00000f] text-[#e8eeff] antialiased">
+      <body className="min-h-screen bg-[#00010a] text-[#eaf1ff] antialiased">
         {children}
       </body>
     </html>

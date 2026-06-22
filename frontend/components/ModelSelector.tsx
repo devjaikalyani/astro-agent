@@ -25,8 +25,8 @@ export const MODELS: ModelOption[] = [
     label: "Claude Sonnet",
     provider: "Anthropic",
     description: "Advanced reasoning and rich narrative responses",
-    badge: "New",
-    badgeColor: "purple",
+    badge: "Reasoning",
+    badgeColor: "violet",
   },
   {
     id: "llama-3.1-8b-instant",
@@ -45,9 +45,9 @@ export const MODELS: ModelOption[] = [
 ];
 
 const BADGE_STYLES: Record<string, string> = {
-  cyan: "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30",
-  purple: "bg-purple-500/15 text-purple-300 border border-purple-500/30",
-  blue: "bg-blue-500/15 text-blue-400 border border-blue-500/30",
+  cyan: "bg-cyan-500/15 text-cyan-300 border border-cyan-500/30",
+  violet: "bg-violet-500/15 text-violet-300 border border-violet-500/30",
+  blue: "bg-blue-500/15 text-blue-300 border border-blue-500/30",
 };
 
 interface ModelSelectorProps {
@@ -63,7 +63,6 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const activeModel = MODELS.find((m) => m.id === selected) ?? MODELS[0];
 
-  // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
@@ -73,8 +72,7 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
   }, []);
 
   return (
-    <div ref={ref} className="relative flex justify-center mb-5">
-      {/* Trigger button */}
+    <div ref={ref} className="relative flex justify-center">
       <button
         ref={triggerRef}
         type="button"
@@ -89,51 +87,46 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
         }}
         disabled={disabled}
         className={[
-          "flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm transition-all duration-200",
-          "border border-[rgba(26,111,255,0.2)] bg-[rgba(0,8,24,0.6)]",
-          "hover:border-[rgba(26,111,255,0.45)] hover:bg-[rgba(0,15,40,0.8)]",
-          disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
-          open ? "border-[rgba(26,111,255,0.5)] bg-[rgba(0,15,40,0.9)]" : "",
+          "glass flex items-center gap-2.5 rounded-full px-4 py-2 text-sm transition-all duration-200",
+          disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer hover:border-[rgba(120,180,255,0.4)]",
+          open ? "border-[rgba(120,180,255,0.5)]" : "",
         ].join(" ")}
       >
-        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-        <span className="text-[#aaccff] font-medium">{activeModel.label}</span>
-        <span className="font-hud text-[#5577aa] text-[10px]">{activeModel.provider}</span>
-        {/* Chevron */}
+        <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-cyan-400" />
+        <span className="font-medium text-[#cfe2ff]">{activeModel.label}</span>
+        <span className="font-hud text-[10px] text-[#6688bb]">{activeModel.provider}</span>
         <svg
-          className={`w-3.5 h-3.5 text-[#4466aa] transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          className={`h-3.5 w-3.5 text-[#5577aa] transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
         >
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
       </button>
 
-      {/* Popover */}
       {open && (
-        <div className="absolute top-full mt-2 z-50 w-80 rounded-2xl overflow-hidden shadow-2xl"
-          style={{
-            background: "rgba(4, 8, 28, 0.97)",
-            border: "1px solid rgba(26, 111, 255, 0.2)",
-            boxShadow: "0 24px 60px rgba(0,0,0,0.7), 0 0 0 1px rgba(26,111,255,0.1)",
-          }}
-        >
-          {/* Header */}
-          <div className="px-4 pt-4 pb-2">
-            <p className="font-hud text-[9px] text-[#5577aa] tracking-[0.35em] uppercase font-semibold">
-              Select Model
-            </p>
+        <div className="glass-strong absolute top-full z-50 mt-3 w-[22rem] overflow-hidden rounded-2xl">
+          <div className="px-4 pb-2 pt-4">
+            <p className="eyebrow text-[9px]">Select Model</p>
           </div>
 
-          {/* Model list */}
-          <div className="p-2 flex flex-col gap-1">
+          <div className="flex flex-col gap-1 p-2">
             {MODELS.map((m, idx) => {
               const isActive = m.id === selected;
               return (
                 <button
                   key={m.id}
-                  ref={(el) => { optionRefs.current[idx] = el; }}
+                  ref={(el) => {
+                    optionRefs.current[idx] = el;
+                  }}
                   type="button"
-                  onClick={() => { onChange(m.id); setOpen(false); triggerRef.current?.focus(); }}
+                  onClick={() => {
+                    onChange(m.id);
+                    setOpen(false);
+                    triggerRef.current?.focus();
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "ArrowDown") {
                       e.preventDefault();
@@ -144,54 +137,45 @@ export default function ModelSelector({ selected, onChange, disabled }: ModelSel
                       if (idx === 0) triggerRef.current?.focus();
                       else optionRefs.current[idx - 1]?.focus();
                     }
-                    if (e.key === "Escape") { setOpen(false); triggerRef.current?.focus(); }
+                    if (e.key === "Escape") {
+                      setOpen(false);
+                      triggerRef.current?.focus();
+                    }
                   }}
                   className={[
-                    "w-full text-left flex items-start gap-3 px-3 py-3 rounded-xl transition-all duration-150",
+                    "flex w-full items-start gap-3 rounded-xl px-3 py-3 text-left transition-all duration-150",
                     isActive
-                      ? "bg-[rgba(26,111,255,0.12)] border border-[rgba(26,111,255,0.3)]"
-                      : "border border-transparent hover:bg-[rgba(26,111,255,0.07)] hover:border-[rgba(26,111,255,0.15)]",
+                      ? "border border-[rgba(120,180,255,0.3)] bg-[rgba(60,110,210,0.16)]"
+                      : "border border-transparent hover:border-[rgba(120,180,255,0.15)] hover:bg-[rgba(120,180,255,0.07)]",
                   ].join(" ")}
                 >
-                  {/* Check / empty circle */}
-                  <div className="mt-0.5 shrink-0 w-4 h-4 rounded-full border flex items-center justify-center transition-all"
+                  <div
+                    className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-all"
                     style={{
-                      borderColor: isActive ? "rgb(34,211,238)" : "rgba(26,111,255,0.3)",
-                      background: isActive ? "rgba(34,211,238,0.15)" : "transparent",
+                      borderColor: isActive ? "rgb(95,233,255)" : "rgba(120,180,255,0.3)",
+                      background: isActive ? "rgba(95,233,255,0.15)" : "transparent",
                     }}
                   >
-                    {isActive && (
-                      <div className="w-2 h-2 rounded-full bg-cyan-400" />
-                    )}
+                    {isActive && <div className="h-2 w-2 rounded-full bg-cyan-300" />}
                   </div>
 
-                  {/* Text */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`text-sm font-semibold ${isActive ? "text-[#e0f0ff]" : "text-[#8899bb]"}`}>
-                        {m.label}
-                      </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`text-sm font-semibold ${isActive ? "text-[#e6f1ff]" : "text-[#9bb2d6]"}`}>{m.label}</span>
                       {m.badge && (
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold tracking-wide ${BADGE_STYLES[m.badgeColor ?? "blue"]}`}>
-                          {m.badge}
-                        </span>
+                        <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold tracking-wide ${BADGE_STYLES[m.badgeColor ?? "blue"]}`}>{m.badge}</span>
                       )}
                     </div>
-                    <p className="font-hud text-[10px] text-[#557799] mt-0.5">{m.provider}</p>
-                    <p className={`text-xs mt-1 ${isActive ? "text-[#6688aa]" : "text-[#4a5a7a]"}`}>
-                      {m.description}
-                    </p>
+                    <p className="font-hud mt-0.5 text-[10px] text-[#6688aa]">{m.provider}</p>
+                    <p className={`mt-1 text-xs ${isActive ? "text-[#7e9bc4]" : "text-[#566f96]"}`}>{m.description}</p>
                   </div>
                 </button>
               );
             })}
           </div>
 
-          {/* Footer note */}
-          <div className="px-4 py-3 border-t border-[rgba(26,111,255,0.1)]">
-            <p className="font-hud text-[9px] text-[#3a5577] text-center tracking-wide">
-              Groq models are free · Claude requires Anthropic API key
-            </p>
+          <div className="border-t border-[rgba(120,180,255,0.1)] px-4 py-3">
+            <p className="font-hud text-center text-[9px] tracking-wide text-[#4a6386]">Groq models are free · Claude needs an Anthropic key</p>
           </div>
         </div>
       )}
