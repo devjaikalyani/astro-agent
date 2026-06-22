@@ -6,9 +6,13 @@ the Sun, Earth's Moon, and Earth cloud map:
   Solar System Scope — https://www.solarsystemscope.com/textures/
   Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
 
-Titan:
-  Steve Albers, from NASA/Cassini mosaics — https://stevealbers.net/albers/sos/sos.html
-  NASA imagery is in the public domain.
+Titan, Io, Europa, Ganymede, Enceladus:
+  Steve Albers, from NASA mosaics (Voyager / Galileo / Cassini / Juno) —
+  https://stevealbers.net/albers/sos/sos.html
+  Derived from NASA imagery, which is in the public domain.
+
+Callisto:
+  Björn Jónsson (bjj.mmedia.is), from NASA/Voyager/Galileo data — public domain.
 
 These are equirectangular surface maps wrapped onto the 3D bodies in
 ExploreScene. Bodies without a bundled map render procedurally instead.

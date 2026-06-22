@@ -11,16 +11,15 @@ const ExploreScene = dynamic(() => import("@/components/ExploreScene"), { ssr: f
 
 function inferType(query: string): ObjectType {
   const q = query.toLowerCase();
-  if (/black.?hole|singularity|event.?horizon|hawking|sagittarius.?a/.test(q)) return "black_hole";
-  if (/nebula|supernova.?remnant|gas.?cloud|emission.?cloud|planetary.?nebula/.test(q)) return "nebula";
-  if (/galaxy|milky.?way|andromeda|spiral|elliptical.?galaxy|quasar/.test(q)) return "galaxy";
-  if (/comet|halley|hale.?bopp|67p|churyumov/.test(q)) return "comet";
-  if (/asteroid|meteor|ceres|vesta|bennu|ryugu/.test(q)) return "asteroid";
-  if (/\bmoon\b|europa|titan|ganymede|callisto|io\b|enceladus|triton|phobos|deimos|luna/.test(q)) return "moon";
-  if (/\bstar\b|stellar|sirius|betelgeuse|rigel|vega|polaris|proxima|neutron.?star|pulsar|white.?dwarf|red.?giant|supergiant/.test(q)) return "star";
-  if (/\bsun\b|solar/.test(q)) return "star";
+  if (/black.?hole|singularity|event.?horizon|hawking|sagittarius.?a|sgr.?a/.test(q)) return "black_hole";
+  if (/nebula|supernova|pillars of creation|eagle|orion|crab|lagoon|carina|helix|gas.?cloud|emission|planetary nebula/.test(q)) return "nebula";
+  if (/galax|milky.?way|andromeda|triangulum|magellanic|sombrero|whirlpool|local group|deep field|spiral|elliptical|quasar/.test(q)) return "galaxy";
+  if (/comet|halley|hale.?bopp|67p|churyumov|oort/.test(q)) return "comet";
+  if (/asteroid|meteor|ceres|vesta|pallas|hygiea|bennu|ryugu|itokawa|\beros\b|kuiper|trojan|minor planet/.test(q)) return "asteroid";
+  if (/\bmoon\b|luna\b|europa|titan|ganymede|callisto|\bio\b|enceladus|triton|phobos|deimos|mimas|tethys|dione|rhea|iapetus|charon|miranda/.test(q)) return "moon";
+  if (/\bstar\b|stellar|\bsun\b|solar|sirius|betelgeuse|rigel|vega|polaris|proxima|alpha centauri|antares|aldebaran|arcturus|canis majoris|\bvy cma\b|hypergiant|supergiant|red giant|red dwarf|brown dwarf|white dwarf|neutron|pulsar|magnetar/.test(q)) return "star";
   if (/\bsaturn\b|\buranus\b|ringed.?planet/.test(q)) return "ringed_planet";
-  if (/planet|mars|venus|jupiter|neptune|mercury|pluto|exoplanet|kepler/.test(q)) return "planet";
+  if (/planet|\bearth\b|terra\b|mars|venus|jupiter|neptune|mercury|pluto|eris|haumea|makemake|exoplanet|kepler|trappist|great red spot/.test(q)) return "planet";
   return null;
 }
 
