@@ -1,9 +1,28 @@
+// Shared types for the ASTRO frontend — SSE protocol v2, conversation
+// turns, and mission-log entries.
+
 export type SSEEvent =
+  | {
+      type: "classified";
+      object_type: string | null;
+      scene_type: string | null;
+      object_name: string | null;
+      confidence: string;
+      method: string;
+    }
   | { type: "status"; message: string }
   | { type: "text_delta"; text: string }
   | { type: "tool_call"; name: string; input: Record<string, unknown> }
-  | { type: "tool_result"; name: string; object_type?: string; object_name?: string }
-  | { type: "done"; cache_read?: number; output_tokens?: number }
+  | {
+      type: "tool_result";
+      name: string;
+      object_type?: string | null;
+      scene_type?: string | null;
+      object_name?: string | null;
+      summary?: string;
+    }
+  | { type: "memory"; action: "stored" | "recalled"; detail: string }
+  | { type: "done" }
   | { type: "error"; message: string };
 
 export type ObjectType =
@@ -18,27 +37,49 @@ export type ObjectType =
   | "galaxy"
   | null;
 
-export const OBJECT_COLORS: Record<string, string> = {
-  planet: "#4a9eff",
-  ringed_planet: "#e8c87a",
-  star: "#ffcc44",
-  moon: "#b0b8c8",
-  asteroid: "#c4956a",
-  comet: "#88ddff",
-  nebula: "#cc44ff",
-  black_hole: "#220033",
-  galaxy: "#ff8844",
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+// One line in the live mission log — the agent's visible thought process.
+export interface LogEntry {
+  id: number;
+  kind: "recognition" | "tool" | "memory" | "error";
+  label: string;
+  detail?: string;
+  source?: string;
+  state: "running" | "done";
+}
+
+export interface KnowledgeStats {
+  facts: number;
+  discoveries: number;
+  last_learned_at: string | null;
+}
+
+// Tool metadata for the mission log: human label + data-source badge.
+export const TOOL_META: Record<string, { label: string; source: string }> = {
+  recall_facts: { label: "Recalling prior discoveries", source: "MEMORY" },
+  remember_fact: { label: "Committing fact to memory", source: "MEMORY" },
+  search_live_astronomy: { label: "Querying live sky databases", source: "SIMBAD / EXO / JPL" },
+  search_nasa_ads: { label: "Scanning peer-reviewed research", source: "NASA ADS" },
+  search_mpc: { label: "Pulling orbital elements", source: "MPC" },
+  classify_celestial_body: { label: "Recognizing object", source: "ASTRO CORE" },
+  get_celestial_info: { label: "Loading local data record", source: "ASTRO DB" },
+  search_by_property: { label: "Searching by property", source: "ASTRO DB" },
+  compare_celestial_bodies: { label: "Assembling comparison", source: "ASTRO DB" },
+  list_object_types: { label: "Listing catalogued objects", source: "ASTRO DB" },
 };
 
-export const TOOL_LABELS: Record<string, string> = {
-  classify_celestial_body: "Classifying object",
-  get_celestial_info: "Fetching data",
-  search_by_property: "Searching database",
-  compare_celestial_bodies: "Running comparison",
-  list_object_types: "Listing objects",
-  search_live_astronomy: "Querying live databases",
-  search_nasa_ads: "Searching research papers",
-  search_mpc: "Querying Minor Planet Center",
-  recall_facts: "Recalling memory",
-  remember_fact: "Storing fact",
+export const OBJECT_LABELS: Record<string, string> = {
+  planet: "Planet",
+  ringed_planet: "Ringed Planet",
+  star: "Star",
+  moon: "Moon",
+  asteroid: "Asteroid",
+  comet: "Comet",
+  nebula: "Nebula",
+  black_hole: "Black Hole",
+  galaxy: "Galaxy",
 };

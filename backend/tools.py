@@ -215,19 +215,20 @@ def search_mpc(query: str) -> dict:
 
 
 def classify_celestial_body(query: str) -> dict:
-    name, data = _search_database(query)
-    if data:
-        return {
-            "found_in_database": True,
-            "matched_name": name,
-            "object_type": data.get("type"),
-            "object_subtype": data.get("subtype"),
-            "confidence": "high",
-        }
+    """Recognition via the deterministic classifier engine (DB + catalog +
+    designation patterns + keywords)."""
+    from classifier import classify
+
+    c = classify(query)
     return {
-        "found_in_database": False,
-        "query": query,
-        "confidence": "use Claude knowledge",
+        "found_in_database": c["method"] == "database",
+        "matched_name": c["matched_name"],
+        "object_type": c["object_type"],
+        "scene_type": c["scene_type"],
+        "object_subtype": c["subtype"],
+        "confidence": c["confidence"],
+        "method": c["method"],
+        **({} if c["object_type"] else {"note": "Not recognized locally — use live tools and your knowledge."}),
     }
 
 

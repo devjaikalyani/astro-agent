@@ -264,6 +264,10 @@ body {
 .astro-response {
   font-family: var(--font-outfit), "Outfit", system-ui, sans-serif;
   font-size: 0.94rem;
+  overflow-wrap: anywhere;
+}
+.astro-response > :first-child {
+  margin-top: 0;
 }
 .astro-response h1,
 .astro-response h2,
@@ -300,6 +304,8 @@ body {
   border-collapse: collapse;
   margin: 1rem 0;
   font-size: 0.85rem;
+  display: block;
+  overflow-x: auto;
 }
 .astro-response th {
   background: rgba(95, 160, 255, 0.1);

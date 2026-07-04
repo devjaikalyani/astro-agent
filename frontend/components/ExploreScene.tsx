@@ -16,6 +16,9 @@ import { TextureSet, textureFor } from "@/lib/textures";
 interface ExploreSceneProps {
   objectType: ObjectType;
   objectName?: string;
+  /** True while the analysis panel is open — eases the subject left so it
+   * stays centered in the visible viewport instead of hiding behind the panel. */
+  shifted?: boolean;
 }
 
 // ── Surface fragment shaders (paired with BODY_VERT) ───────────────────────
@@ -734,8 +737,13 @@ const CAM_DIST: Record<string, number> = {
   galaxy: 20,
 };
 
-export default function ExploreScene({ objectType, objectName }: ExploreSceneProps) {
+export default function ExploreScene({ objectType, objectName, shifted = false }: ExploreSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const shiftedRef = useRef(shifted);
+
+  useEffect(() => {
+    shiftedRef.current = shifted;
+  }, [shifted]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -855,6 +863,7 @@ export default function ExploreScene({ objectType, objectName }: ExploreScenePro
 
     const clock = new THREE.Clock();
     let raf = 0;
+    let lookX = 0; // eased look-target offset while the analysis panel is open
     const animate = () => {
       raf = requestAnimationFrame(animate);
       const t = clock.getElapsedTime();
@@ -868,12 +877,16 @@ export default function ExploreScene({ objectType, objectName }: ExploreScenePro
       if (pressed.has("ArrowDown")) el = clampEl(el - 0.025);
       if (!dragging && pressed.size === 0) az += 0.0008; // gentle idle auto-rotate
 
+      // Only shift on viewports wide enough for the side panel
+      const wantShift = shiftedRef.current && window.innerWidth >= 1024;
+      lookX += ((wantShift ? dist * 0.18 : 0) - lookX) * 0.04;
+
       camera.position.set(
         Math.sin(az) * Math.cos(el) * dist,
         Math.sin(el) * dist,
         Math.cos(az) * Math.cos(el) * dist,
       );
-      camera.lookAt(0, 0, 0);
+      camera.lookAt(lookX, 0, 0);
       composer.render();
     };
     animate();

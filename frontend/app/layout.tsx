@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Space_Grotesk, Outfit, JetBrains_Mono } from "next/font/google";
+import MotionProvider from "@/components/MotionProvider";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -38,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${spaceGrotesk.variable} ${outfit.variable} ${jetbrainsMono.variable}`}>
       <body className="min-h-screen bg-[#00010a] text-[#eaf1ff] antialiased">
-        {children}
+        <MotionProvider>{children}</MotionProvider>
       </body>
     </html>
   );

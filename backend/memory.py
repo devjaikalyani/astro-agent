@@ -109,7 +109,7 @@ class MemoryStore:
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
-    def recall(self, query: str, n_vectors: int = 4, n_facts: int = 8) -> str:
+    def recall(self, query: str, n_vectors: int = 3, n_facts: int = 6) -> str:
         """
         Retrieve relevant memories for a query.
         Returns a formatted string (empty string if nothing found).
@@ -131,7 +131,9 @@ class MemoryStore:
                 )
                 docs = (res.get("documents") or [[]])[0]
                 if docs:
-                    block = "\n---\n".join(docs)
+                    # Trim each doc so the injected context stays within
+                    # free-tier per-request token budgets.
+                    block = "\n---\n".join(d[:700] for d in docs)
                     sections.append(f"### Past tool discoveries (semantic match)\n{block}")
         except Exception:
             pass
@@ -176,6 +178,47 @@ class MemoryStore:
         if result:
             return json.dumps({"memories": result})
         return json.dumps({"memories": "No relevant memories found yet."})
+
+    # ── Introspection (powers /api/stats and /api/facts) ──────────────────────
+
+    def stats(self) -> dict:
+        """Aggregate learning stats. Never raises."""
+        out = {"facts": 0, "discoveries": 0, "last_learned_at": None}
+        try:
+            self._init()
+        except Exception:
+            return out
+        try:
+            with self._db_lock:
+                row = self._db.execute(
+                    "SELECT COUNT(*), MAX(created_at) FROM facts"
+                ).fetchone()
+            out["facts"] = row[0] or 0
+            out["last_learned_at"] = row[1]
+        except Exception:
+            pass
+        try:
+            out["discoveries"] = self._collection.count()
+        except Exception:
+            pass
+        return out
+
+    def recent_facts(self, limit: int = 10) -> list[dict]:
+        """Most recently learned curated facts. Never raises."""
+        try:
+            self._init()
+            with self._db_lock:
+                rows = self._db.execute(
+                    "SELECT fact, source, confidence, created_at FROM facts "
+                    "ORDER BY id DESC LIMIT ?",
+                    (max(1, min(50, limit)),),
+                ).fetchall()
+            return [
+                {"fact": r[0], "source": r[1], "confidence": r[2], "created_at": r[3]}
+                for r in rows
+            ]
+        except Exception:
+            return []
 
 
 memory = MemoryStore()
