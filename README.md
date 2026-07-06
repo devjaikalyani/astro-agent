@@ -1,186 +1,115 @@
-# ASTRO — Agentic Celestial Intelligence
+# ASTRO — A Universe That Learns
 
-An autonomous AI agent that recognizes any natural celestial body, interrogates live observatory networks, and permanently learns from every discovery it makes. Ask about any planet, star, nebula, black hole, galaxy, comet, moon, or asteroid — ASTRO recognizes it instantly, runs an agentic tool loop against real astronomical databases (SIMBAD, NASA Exoplanet Archive, JPL Horizons, NASA ADS, Minor Planet Center), and streams a deep-space analysis inside a cinematic, fully 3D environment.
+An autonomous astronomical intelligence living inside a navigable 3D universe. The website is not a page with a search box — it opens inside a real-time solar system. Fly between worlds, click any body to wake the agent, warp to deep fields for anything beyond the system, ride agent-narrated journeys, and watch everything the agent learns accumulate as a growing constellation.
 
-## What makes it an agent
+## The three experiences
 
-- **Recognition engine** — a deterministic classifier identifies the object before any model call: local database (200+ curated bodies), famous catalog table (Messier/NGC), designation patterns (HD, PSR, Kepler-, C/2023 A3, provisional minor-planet IDs), and keyword heuristics. The 3D scene locks on within milliseconds.
-- **Autonomous tool loop** — one orchestrator drives every model. The agent decides which live databases to query, reads the results, and keeps digging until it has enough to answer (hard-capped rounds).
-- **Compounding memory** — every live discovery is auto-indexed in a ChromaDB vector store; the agent also curates precise facts into SQLite via its own `remember_fact` tool. Both are recalled on future queries. The more you ask, the smarter it gets.
-- **Visible cognition** — the Mission Log streams every recognition, tool call, and memory write to the UI in real time. You watch the agent think.
-- **Conversation** — follow-up questions keep full context; the agent answers conversationally without repeating the full dossier.
+### 1. The Universe (`/`)
+A stylized real-time solar system: the Sun, eight textured planets on true-ratio orbits, six major moons (Moon, Io, Europa, Ganymede, Callisto, Titan), Saturn's rings, the asteroid belt, and a Milky Way sky. Drag to orbit, scroll to zoom, click any world for a cinematic approach. Every body has an instrument card and an ENGAGE ASTRO button that opens the agent dock. Search anything else in the universe (Cmd+K) — Betelgeuse, M31, Sagittarius A*, TRAPPIST-1e — and the camera warps to a procedurally generated volumetric deep field while the agent streams its analysis.
 
-## Features
+### 2. Journeys (`/journeys`)
+Agent-narrated tours. ASTRO composes the route, writes the narration, and flies the camera stop by stop — in-system flights for solar bodies, warps for deep-space objects. One flagship tour (The Grand Tour) is hand-crafted and launches instantly; every other theme — presets or anything you type — is composed live by the model as structured JSON.
 
-- Real-time SSE streaming with a rich event protocol (`classified`, `tool_call`, `tool_result`, `memory`, `text_delta`)
-- Multi-model: Llama 3.3 70B / Llama 3.1 8B / Gemma 2 9B via Groq, Claude Sonnet via Anthropic — one shared agent loop
-- Live astronomical data from SIMBAD, NASA Exoplanet Archive, JPL Horizons, and the Minor Planet Center
-- Peer-reviewed research surfaced live from NASA ADS
-- Knowledge stats on the home page: facts learned and discoveries indexed, straight from the agent's memory
-- Cinematic deep-space UI: glass HUD, live telemetry, mission log, persistent analysis panel with follow-up composer
-- Fully volumetric 3D for every object type — procedural GLSL surfaces (planets, gas giants, stars) and particle systems (nebulae, galaxies, comet tails, black-hole accretion disks) with UnrealBloom postprocessing. No flat images.
+### 3. The Observatory (`/observatory`)
+The agent's memory as a living sky. Every fact ASTRO has chosen to remember is a star, deterministically positioned and colored by data source, connected to its nearest kin. Hover any star to read what was learned and when. The sky only ever grows.
+
+## The agent
+
+- **Recognition engine** — deterministic classification before any model call: curated database (200+ bodies), Messier/NGC catalog table, designation patterns (HD, PSR, `C/2023 A3`, `2020 QG`), keyword heuristics. Solar-system bodies route to in-system camera flights; everything else warps to a deep field.
+- **Autonomous tool loop** — one orchestrator for every model (Groq Llama/Gemma + Anthropic Claude behind one provider interface). The agent decides which live databases to interrogate: SIMBAD, NASA Exoplanet Archive, JPL Horizons, NASA ADS (peer-reviewed papers), Minor Planet Center.
+- **Compounding memory** — live discoveries auto-indexed in a ChromaDB vector store; the agent curates precise facts into SQLite via its own `remember_fact` tool. Both are recalled on future queries and rendered in the Observatory.
+- **Visible cognition** — the mission feed streams every recognition, tool call, and memory write into the dock as it happens.
+- **Conversation** — follow-ups keep full context without repeating the dossier.
 
 ## Stack
 
-| Layer    | Tech                                                                   |
-|----------|------------------------------------------------------------------------|
-| Frontend | Next.js 15.5, Three.js 0.184 + custom GLSL shaders, Tailwind CSS 4, TypeScript |
-| Backend  | FastAPI, Groq SDK, Anthropic SDK, SlowAPI                              |
-| Memory   | ChromaDB (semantic search) + SQLite (curated facts)                    |
-| AI       | Llama 3.3 70B (Groq), Claude Sonnet 4.6 (Anthropic)                    |
+| Layer    | Tech |
+|----------|------|
+| Frontend | Next.js 15.5, Three.js 0.184 (custom engine + GLSL), Tailwind CSS 4, Framer Motion, TypeScript |
+| Backend  | FastAPI, Groq SDK, Anthropic SDK, SlowAPI |
+| Memory   | ChromaDB (semantic) + SQLite (curated facts) |
+| Type     | Unbounded / Sora / Newsreader / IBM Plex Mono |
 
 ## Setup
 
-### Prerequisites
-
-- Node.js 20+
-- Python 3.11+
-- A [Groq API key](https://console.groq.com/keys)
-- An [Anthropic API key](https://console.anthropic.com/settings/keys) (only needed for Claude model)
-- A [NASA ADS API key](https://ui.adsabs.harvard.edu/user/settings/token) (free — for research paper search)
-
-### 1. Clone and configure environment
+Prerequisites: Node 20+, Python 3.11+, a [Groq key](https://console.groq.com/keys) (free), optionally an [Anthropic key](https://console.anthropic.com/settings/keys) and a [NASA ADS key](https://ui.adsabs.harvard.edu/user/settings/token).
 
 ```bash
-git clone <repo-url>
-cd astro-agent
+cp .env.example .env        # add your keys
 
-cp .env.example .env
-# Edit .env and add your API keys
-```
-
-### 2. Install backend dependencies
-
-```bash
-cd backend
-pip install -r requirements.txt
-cd ..
-```
-
-### 3. Install frontend and root dependencies
-
-```bash
+cd backend && pip install -r requirements.txt && cd ..
 npm install
 npm --prefix frontend install
+
+npm start                   # backend :8000 + frontend :3000
 ```
-
-### 4. Run
-
-```bash
-npm start
-```
-
-This starts both the FastAPI backend (port 8000) and the Next.js frontend (port 3000) concurrently with hot-reload.
 
 Open [http://localhost:3000](http://localhost:3000).
 
-### Run separately
-
-```bash
-# Backend only
-cd backend && uvicorn main:app --port 8000 --reload
-
-# Frontend only
-npm --prefix frontend run dev
-```
-
-## Project Structure
+## Project structure
 
 ```
-.
-├── backend/
-│   ├── main.py          # FastAPI app: /api/ask, /api/classify, /api/stats, /api/facts
-│   ├── orchestrator.py  # The agentic loop — one pipeline for every model
-│   ├── providers.py     # Groq + Anthropic adapters behind one interface
-│   ├── classifier.py    # Recognition engine (DB + catalogs + designations + keywords)
-│   ├── prompts.py       # Agent identity and behavior
-│   ├── memory.py        # Persistent learning: ChromaDB + SQLite + stats
-│   ├── tools.py         # Astronomical tool definitions + live API calls
-│   └── data.py          # Local celestial body database
-├── frontend/
-│   ├── app/
-│   │   ├── globals.css               # Cinematic design system (glass, HUD, motion)
-│   │   ├── layout.tsx                # Fonts (Space Grotesk / Outfit / JetBrains Mono)
-│   │   ├── page.tsx                  # Home — hero, knowledge stats, typed targets
-│   │   └── explore/[query]/page.tsx  # Mission control: 3D + mission log + conversation
-│   ├── components/
-│   │   ├── SpaceBackground.tsx  # Home hero: gas giant + ring + nebulae + starfields
-│   │   ├── ExploreScene.tsx     # Volumetric scene per object type
-│   │   ├── MissionLog.tsx       # Live feed of the agent's tool calls and memory writes
-│   │   ├── AnalysisPanel.tsx    # Streaming conversation + follow-up composer
-│   │   ├── KnowledgeStats.tsx   # Facts learned / discoveries indexed
-│   │   ├── AstroSearch.tsx      # Glass command bar + typed target chips
-│   │   └── ModelSelector.tsx    # Model picker
-│   └── lib/
-│       ├── types.ts             # SSE protocol v2, chat + mission-log types
-│       ├── glsl.ts              # Shared GLSL: simplex noise, fbm, body/atmosphere shaders
-│       └── three-utils.ts       # Renderer, bloom composer, starfields, disposal helpers
-├── .env.example
-└── package.json         # Root scripts (concurrently)
+backend/
+  main.py                 # uvicorn entry shim -> app.main
+  app/
+    main.py               # API: /api/agent/stream, /api/recognize,
+                          #      /api/knowledge, /api/journeys(+/presets)
+    agent.py              # the agentic loop (SSE protocol v3)
+    providers.py          # Groq + Claude adapters, one interface
+    recognition.py        # deterministic recognition engine
+    journeys.py           # journey composer + hand-crafted Grand Tour
+    knowledge.py          # ChromaDB + SQLite + constellation shaping
+    toolkit.py            # tool schemas + dispatcher
+    live_data.py          # SIMBAD / Exoplanet Archive / JPL / ADS / MPC
+    prompts.py            # agent identity + journey composer prompt
+    celestial_db.py       # curated local dataset (200+ bodies)
+    config.py, events.py
+frontend/
+  app/
+    page.tsx              # The Universe
+    journeys/page.tsx     # Journey library
+    journeys/play/page.tsx# Narrated player
+    observatory/page.tsx  # Knowledge constellation
+  components/             # TopNav, AgentDock, CommandPalette,
+                          # useAgentSession, useModel
+  lib/
+    api.ts                # SSE v3 client + endpoints
+    universe-data.ts      # solar system dataset + focus cards
+    engine/
+      universe.ts         # solar system, camera flights, picking, warp
+      deep.ts             # procedural deep-field builders (9 classes)
+      constellation.ts    # observatory sky
+      core.ts, shaders.ts # renderer, bloom, starfields, GLSL
 ```
 
 ## API
 
-### `POST /api/ask`
-
-Rate limited: 10 requests/minute, 100/day. Supports multi-turn conversation via `history`.
-
-**Request**
-```json
-{
-  "query": "How thick is the ice shell?",
-  "model": "llama-3.3-70b-versatile",
-  "history": [
-    { "role": "user", "content": "Tell me about Europa" },
-    { "role": "assistant", "content": "### Europa — Jovian Moon..." }
-  ]
-}
-```
-
-**Supported models**
-| Model ID | Provider |
-|---|---|
-| `llama-3.3-70b-versatile` | Groq |
-| `llama-3.1-8b-instant` | Groq |
-| `gemma2-9b-it` | Groq |
-| `claude-sonnet-4-6` | Anthropic |
-
-**Response** — `text/event-stream` SSE
-
-```
-data: {"type": "classified",  "object_type": "moon", "scene_type": "moon", "object_name": "Europa", "confidence": "high", "method": "database"}
-data: {"type": "status",      "message": "Linking observatory network"}
-data: {"type": "memory",      "action": "recalled", "detail": "Prior discoveries loaded from memory"}
-data: {"type": "tool_call",   "name": "search_live_astronomy", "input": {"query": "Europa"}}
-data: {"type": "tool_result", "name": "search_live_astronomy", "object_type": "moon", "object_name": "Europa", "summary": "SIMBAD CDS, JPL Horizons"}
-data: {"type": "memory",      "action": "stored", "detail": "Europa's ice shell is estimated at 15-25 km thick..."}
-data: {"type": "text_delta",  "text": "### Europa — Jovian Moon\n\n"}
-data: {"type": "error",       "message": "Connection interrupted. Partial response shown."}
-data: {"type": "done"}
-```
-
-### `GET /api/classify?q=<query>`
-
-Instant recognition without invoking the agent.
+### `POST /api/agent/stream` — SSE protocol v3
 
 ```json
-{ "query": "M31", "object_type": "galaxy", "scene_type": "galaxy", "matched_name": "Andromeda Galaxy", "confidence": "high", "method": "catalog" }
+{ "query": "Europa", "model": "llama-3.3-70b-versatile", "history": [] }
 ```
 
-### `GET /api/stats`
-
-What the agent has learned so far.
-
-```json
-{ "facts": 42, "discoveries": 180, "last_learned_at": "2026-07-04 09:12:44" }
+```
+data: {"e":"recognition", "body":{"object_type":"moon","scene":"moon","name":"Europa","solar_body":"europa", ...}}
+data: {"e":"phase",      "label":"Linking observatory network"}
+data: {"e":"recalled",   "detail":"Prior discoveries loaded from memory"}
+data: {"e":"tool",       "id":"a1b2c3d4","name":"search_live_astronomy","label":"Querying live sky databases","source":"SIMBAD/EXO/JPL"}
+data: {"e":"tool_done",  "id":"a1b2c3d4","summary":"SIMBAD CDS, JPL Horizons","body":{...}}
+data: {"e":"learned",    "fact":"Europa's ice shell is estimated at 15-25 km thick..."}
+data: {"e":"delta",      "t":"### Europa — Jovian Moon\n\n"}
+data: {"e":"fault",      "message":"..."}
+data: {"e":"complete"}
 ```
 
-### `GET /api/facts?limit=8`
+Models: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`, `gemma2-9b-it` (Groq), `claude-sonnet-4-6` (Anthropic). Rate limited 10/min, 150/day.
 
-Most recently learned curated facts.
+### `POST /api/journeys`
+
+`{ "theme": "volcanic worlds", "model": "..." }` -> `{ title, subtitle, stops: [{ name, kind: "solar"|"deep", type, headline, narration }] }`. Theme `grand-tour` returns the hand-crafted flagship instantly.
+
+### `GET /api/journeys/presets` · `GET /api/recognize?q=` · `GET /api/knowledge?limit=`
+
+Presets list · instant recognition · memory stats + every learned fact as a positioned star.
 
 ### `GET /health`
-
-```json
-{ "status": "online", "agent": "ASTRO", "version": "2.0.0" }
-```

@@ -1,8 +1,6 @@
 """
-Model-provider adapters.
-
-Each adapter owns its provider-native message list and exposes one normalized
-interface so the orchestrator runs a single agentic loop for every model:
+Model-provider adapters behind one normalized interface, so the agent
+orchestrator is provider-agnostic:
 
     stream_turn(allow_tools)  -> async generator of text deltas
     wants_tools / tool_calls  -> populated after the turn completes
@@ -12,31 +10,19 @@ interface so the orchestrator runs a single agentic loop for every model:
 """
 
 import json
-import os
+import uuid
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import AsyncGenerator, Optional
 
-from dotenv import load_dotenv
-
-from prompts import SYSTEM_PROMPT
-from tools import TOOLS, CLAUDE_TOOLS_CACHED
-
-load_dotenv(Path(__file__).parent.parent / ".env", override=True)
-
-MAX_OUTPUT_TOKENS = 4000
-
-# Groq's free tier counts reserved max_tokens against a per-request TPM
-# ceiling (6k for 8B-class models), so small models get a smaller budget.
-MODEL_MAX_TOKENS = {
-    "llama-3.1-8b-instant": 1500,
-    "gemma2-9b-it": 2000,
-}
+from app.config import MAX_OUTPUT_TOKENS, MODEL_MAX_TOKENS, anthropic_key, groq_key
+from app.prompts import SYSTEM_PROMPT
+from app.toolkit import CLAUDE_TOOLS_CACHED, TOOLS
 
 
 @dataclass
 class ToolCall:
-    id: str
+    id: str            # provider call id (returned to the provider)
+    uid: str           # short id for SSE event matching in the UI
     name: str
     input: dict = field(default_factory=dict)
 
@@ -49,13 +35,17 @@ class ProviderError(Exception):
         self.retryable = retryable
 
 
+def _uid() -> str:
+    return uuid.uuid4().hex[:8]
+
+
 # ── Groq (Llama / Gemma, OpenAI-compatible) ─────────────────────────────────
 
 class GroqProvider:
     def __init__(self, model: str, history: list[dict], user_content: str):
         from groq import AsyncGroq
 
-        key = os.environ.get("GROQ_API_KEY")
+        key = groq_key()
         if not key:
             raise ProviderError("GROQ_API_KEY is not set. Add it to your .env file.")
         self._client = AsyncGroq(api_key=key)
@@ -123,7 +113,7 @@ class GroqProvider:
                     parsed = json.loads(raw["arguments"])
                 except json.JSONDecodeError:
                     parsed = {}
-                self.tool_calls.append(ToolCall(id=raw["id"], name=raw["name"], input=parsed))
+                self.tool_calls.append(ToolCall(id=raw["id"], uid=_uid(), name=raw["name"], input=parsed))
 
     def commit_assistant_turn(self) -> None:
         self.messages.append({
@@ -148,9 +138,7 @@ class GroqProvider:
 
 # ── Anthropic (Claude) ──────────────────────────────────────────────────────
 
-# System prompt as a cacheable block — Anthropic caches it after the first
-# call. Render order is tools -> system -> messages, so both stable parts
-# get cached.
+# Cacheable system block — Anthropic caches it after the first call.
 _SYSTEM_CACHED = [{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
 
 
@@ -158,7 +146,7 @@ class ClaudeProvider:
     def __init__(self, model: str, history: list[dict], user_content: str):
         from anthropic import AsyncAnthropic
 
-        key = os.environ.get("ANTHROPIC_API_KEY")
+        key = anthropic_key()
         if not key:
             raise ProviderError("ANTHROPIC_API_KEY is not set. Add it to your .env file.")
         self._client = AsyncAnthropic(api_key=key)
@@ -176,8 +164,8 @@ class ClaudeProvider:
         self.tool_calls = []
         self._response = None
 
-        # Tools stay defined even on the forced-text turn because the message
-        # history still holds tool_use blocks; tool_choice=none blocks new calls.
+        # Tools stay defined on the forced-text turn (history holds tool_use
+        # blocks); tool_choice=none blocks new calls.
         tool_choice = {"type": "auto"} if allow_tools else {"type": "none"}
 
         try:
@@ -200,7 +188,9 @@ class ClaudeProvider:
             self.wants_tools = True
             for block in self._response.content:
                 if block.type == "tool_use":
-                    self.tool_calls.append(ToolCall(id=block.id, name=block.name, input=block.input or {}))
+                    self.tool_calls.append(
+                        ToolCall(id=block.id, uid=_uid(), name=block.name, input=block.input or {})
+                    )
 
     def commit_assistant_turn(self) -> None:
         if self._response:

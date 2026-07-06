@@ -2,25 +2,23 @@
 ASTRO recognition engine.
 
 Deterministic celestial-body recognition that runs before the LLM ever sees
-the query, so the client knows what it is looking at within milliseconds:
+the query:
 
-  1. Local database match  (200+ curated bodies across 8 categories)
-  2. Famous catalog objects (Messier / NGC / named deep-sky table)
-  3. Catalog-designation patterns (HD, HIP, PSR, Kepler-, C/, provisional
-     minor-planet designations, ...)
-  4. Keyword heuristics (last resort)
+  1. Local curated database   (200+ bodies across 8 categories)
+  2. Famous catalog objects   (Messier / NGC table)
+  3. Designation patterns     (HD, HIP, PSR, Kepler-, C/2023 A3, 2020 QG, ...)
+  4. Keyword heuristics       (last resort)
 
-Returns both the scientific `object_type` and the `scene_type` the frontend
-uses to build the volumetric 3D scene (e.g. Saturn is a planet scientifically
-but renders as `ringed_planet`).
+Returns the scientific `object_type` plus the `scene` the frontend uses to
+build the volumetric 3D view (Saturn is a planet scientifically but renders
+as `ringed_planet`).
 """
 
 import re
 from typing import Optional, TypedDict
 
-from data import CELESTIAL_DATABASE
+from app.celestial_db import CELESTIAL_DATABASE
 
-# data.py category -> canonical object type
 _CATEGORY_TYPE = {
     "planets": "planet",
     "stars": "star",
@@ -32,10 +30,7 @@ _CATEGORY_TYPE = {
     "galaxies": "galaxy",
 }
 
-# Famous deep-sky catalog objects the local DB may not list under their
-# catalog IDs. Messier and common NGC numbers people actually type.
 _CATALOG_OBJECTS: dict[str, tuple[str, str]] = {
-    # id -> (object_type, proper name)
     "m1":   ("nebula", "Crab Nebula"),
     "m8":   ("nebula", "Lagoon Nebula"),
     "m13":  ("star", "Hercules Cluster"),
@@ -65,26 +60,18 @@ _CATALOG_OBJECTS: dict[str, tuple[str, str]] = {
     "ngc 6543": ("nebula", "Cat's Eye Nebula"),
 }
 
-# Designation patterns, checked in order. First match wins.
 _DESIGNATION_RULES: list[tuple[re.Pattern, str]] = [
-    # Pulsars / neutron stars
     (re.compile(r"^psr\b", re.I), "star"),
-    # Comet designations: C/2023 A3, P/2010 T2, 1P, 67P, 2I/Borisov
     (re.compile(r"^[cpx]/\d{4}\s", re.I), "comet"),
     (re.compile(r"^\d{1,3}[pi](\b|/)", re.I), "comet"),
-    # Exoplanet suffix: any designation ending in " b".." h" (HD 209458 b, Kepler-22b)
     (re.compile(r"^(kepler|k2|trappist|toi|hat-p|wasp|corot|gj|gliese|hd|55 cnc|proxima)[\s-].*[b-h]$", re.I), "planet"),
     (re.compile(r"^(kepler|k2|toi|hat-p|wasp|corot)-\d+", re.I), "planet"),
-    # Star catalogs: HD 209458, HIP 65474, HR 7001, Gliese 581, Wolf 359, Ross 128
     (re.compile(r"^(hd|hip|hr|gliese|gj|wolf|ross|lacaille|luyten|bd)[\s+-]?\d", re.I), "star"),
-    # Provisional minor-planet designations: 2020 QG, 1998 OR2; numbered: (99942)
     (re.compile(r"^\(?\d{4,6}\)?\s?[a-z]{2}\d*$", re.I), "asteroid"),
     (re.compile(r"^\(\d+\)", re.I), "asteroid"),
-    # Sagittarius A*, M87*
     (re.compile(r"\*$"), "black_hole"),
 ]
 
-# Keyword heuristics — the safety net. Order matters: specific before generic.
 _KEYWORD_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"black.?hole|singularity|event.?horizon|accretion|sagittarius.?a|sgr.?a|ton\s?618|quasar|blazar", re.I), "black_hole"),
     (re.compile(r"nebula|supernova remnant|pillars of creation|molecular cloud|h\s?ii region", re.I), "nebula"),
@@ -96,32 +83,37 @@ _KEYWORD_RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"exoplanet|planet|kepler|trappist|\bearth\b|\bmars\b|venus|jupiter|saturn|uranus|neptune|mercury\b|pluto|eris\b|haumea|makemake", re.I), "planet"),
 ]
 
-# Bodies that scientifically are planets but render with a particle ring.
 _RINGED = re.compile(r"saturn|uranus", re.I)
 
+# Bodies that exist as navigable targets inside the frontend solar system.
+SOLAR_BODIES = {
+    "sun", "mercury", "venus", "earth", "mars", "jupiter", "saturn",
+    "uranus", "neptune", "moon", "io", "europa", "ganymede", "callisto", "titan",
+}
 
-class Classification(TypedDict):
+
+class Recognition(TypedDict):
     query: str
     object_type: Optional[str]
-    scene_type: Optional[str]
-    matched_name: Optional[str]
+    scene: Optional[str]
+    name: Optional[str]
     subtype: Optional[str]
+    solar_body: Optional[str]
     confidence: str
     method: str
 
 
-def _scene_type(object_type: Optional[str], name: str, data: Optional[dict]) -> Optional[str]:
+def _scene(object_type: Optional[str], name: str, data: Optional[dict]) -> Optional[str]:
+    # Only visually prominent ring systems get the ringed scene — the DB
+    # records rings=True for Jupiter/Neptune's faint rings too.
     if object_type != "planet":
         return object_type
-    if data and data.get("rings"):
-        return "ringed_planet"
     if _RINGED.search(name):
         return "ringed_planet"
     return "planet"
 
 
 def _db_lookup(q: str) -> tuple[Optional[str], Optional[str], Optional[dict]]:
-    """Exact, then substring match against the curated local database."""
     for category, objects in CELESTIAL_DATABASE.items():
         if q in objects:
             return _CATEGORY_TYPE.get(category), q, objects[q]
@@ -132,12 +124,17 @@ def _db_lookup(q: str) -> tuple[Optional[str], Optional[str], Optional[dict]]:
     return None, None, None
 
 
-def classify(query: str) -> Classification:
+def _solar_body(name: Optional[str], q: str) -> Optional[str]:
+    for cand in ((name or "").lower(), q):
+        if cand in SOLAR_BODIES:
+            return cand
+    return None
+
+
+def recognize(query: str) -> Recognition:
     """Recognize a celestial body from free text. Never raises."""
     raw = (query or "").strip()
     q = re.sub(r"\s+", " ", raw.lower()).strip(" ?!.")
-
-    # Strip common question scaffolding so "tell me about europa" still hits the DB
     stripped = re.sub(
         r"^(tell me about|what is|what's|who discovered|explain|describe|show me|info on|facts about|about)\s+",
         "", q,
@@ -147,45 +144,46 @@ def classify(query: str) -> Classification:
     for cand in candidates:
         obj_type, name, data = _db_lookup(cand)
         if obj_type:
-            return Classification(
+            return Recognition(
                 query=raw, object_type=obj_type,
-                scene_type=_scene_type(obj_type, name or "", data),
-                matched_name=(name or cand).title(),
+                scene=_scene(obj_type, name or "", data),
+                name=(name or cand).title(),
                 subtype=(data or {}).get("subtype"),
+                solar_body=_solar_body(name, cand),
                 confidence="high", method="database",
             )
 
     for cand in candidates:
         hit = _CATALOG_OBJECTS.get(re.sub(r"\s+", " ", cand))
         if hit:
-            return Classification(
+            return Recognition(
                 query=raw, object_type=hit[0],
-                scene_type=_scene_type(hit[0], hit[1], None),
-                matched_name=hit[1], subtype=None,
+                scene=_scene(hit[0], hit[1], None),
+                name=hit[1], subtype=None, solar_body=None,
                 confidence="high", method="catalog",
             )
 
     for cand in candidates:
         for pattern, obj_type in _DESIGNATION_RULES:
             if pattern.search(cand):
-                return Classification(
+                return Recognition(
                     query=raw, object_type=obj_type,
-                    scene_type=_scene_type(obj_type, cand, None),
-                    matched_name=raw.title() if len(raw) < 40 else None,
-                    subtype=None, confidence="medium", method="designation",
+                    scene=_scene(obj_type, cand, None),
+                    name=raw.title() if len(raw) < 40 else None,
+                    subtype=None, solar_body=None,
+                    confidence="medium", method="designation",
                 )
 
     for pattern, obj_type in _KEYWORD_RULES:
         if pattern.search(q):
-            return Classification(
+            return Recognition(
                 query=raw, object_type=obj_type,
-                scene_type=_scene_type(obj_type, q, None),
-                matched_name=None, subtype=None,
+                scene=_scene(obj_type, q, None),
+                name=None, subtype=None, solar_body=None,
                 confidence="low", method="keyword",
             )
 
-    return Classification(
-        query=raw, object_type=None, scene_type=None,
-        matched_name=None, subtype=None,
-        confidence="none", method="none",
+    return Recognition(
+        query=raw, object_type=None, scene=None, name=None,
+        subtype=None, solar_body=None, confidence="none", method="none",
     )
