@@ -1,10 +1,13 @@
 Texture credits
 ===============
 
-Planets (Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune),
-the Sun, Earth's Moon, and Earth cloud map:
+Planets (Mercury, Venus, Earth day/night/clouds, Mars, Jupiter, Saturn,
+Uranus, Neptune), the Sun, Earth's Moon, the dwarf planets (Ceres, Eris,
+Haumea, Makemake — "fictional" concept maps), and the Milky Way panorama
+(milkyway.jpg):
   Solar System Scope — https://www.solarsystemscope.com/textures/
   Licensed under Creative Commons Attribution 4.0 International (CC BY 4.0).
+  Hero bodies are the 8K masters downscaled to 4K equirectangular.
 
 Titan, Io, Europa, Ganymede, Enceladus:
   Steve Albers, from NASA mosaics (Voyager / Galileo / Cassini / Juno) —
@@ -14,10 +17,10 @@ Titan, Io, Europa, Ganymede, Enceladus:
 Callisto:
   Björn Jónsson (bjj.mmedia.is), from NASA/Voyager/Galileo data — public domain.
 
-These are equirectangular surface maps wrapped onto the 3D bodies in
-ExploreScene. Bodies without a bundled map render procedurally instead.
+These are equirectangular surface maps wrapped onto the 3D bodies by the
+universe engine. Bodies without a bundled map (Pluto, Charon, the small
+moons, comet nuclei) render procedurally instead.
 
-To add more bodies (e.g. Europa, Io, Ganymede, Callisto): drop an
-equirectangular map named <body>.jpg here and add an entry to
-frontend/lib/textures.ts. USGS global mosaics:
-  https://astrogeology.usgs.gov/search?pmi-target=europa
+To add more bodies: drop an equirectangular map named <body>.jpg here and
+reference it from frontend/lib/universe-data.ts. USGS global mosaics:
+  https://astrogeology.usgs.gov/search

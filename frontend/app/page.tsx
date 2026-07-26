@@ -28,6 +28,8 @@ export default function UniversePage() {
   const [dockTarget, setDockTarget] = useState("ASTRO");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [hintShown, setHintShown] = useState(true);
+  const [timeScale, setTimeScale] = useState(1);
+  const [simYears, setSimYears] = useState(0);
 
   const session = useAgentSession(model);
   const sessionRef = useRef(session);
@@ -71,6 +73,18 @@ export default function UniversePage() {
       }
     });
 
+    uni.onClock((years) => setSimYears(years));
+
+    // Deep link: /?focus=earth flies straight to a body on arrival
+    const wanted = new URLSearchParams(window.location.search).get("focus");
+    if (wanted && ALL_BODY_IDS.includes(wanted)) {
+      setTimeout(() => {
+        uni.focus(wanted);
+        setFocusId(wanted);
+        setHintShown(false);
+      }, 400);
+    }
+
     return () => {
       uni.dispose();
       universeRef.current = null;
@@ -108,6 +122,11 @@ export default function UniversePage() {
   const releaseFocus = useCallback(() => {
     universeRef.current?.focus(null);
     setFocusId(null);
+  }, []);
+
+  const applyTimeScale = useCallback((s: number) => {
+    universeRef.current?.setTimeScale(s);
+    setTimeScale(s);
   }, []);
 
   const onPaletteSubmit = useCallback((r: PaletteResult) => {
@@ -236,6 +255,42 @@ export default function UniversePage() {
                   RELEASE
                 </button>
               </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Time instrument */}
+      <AnimatePresence>
+        {mode === "system" && (
+          <motion.div
+            className="fixed bottom-6 left-1/2 z-20 -translate-x-1/2"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0, transition: { delay: 0.6 } }}
+            exit={{ opacity: 0, y: 10 }}
+          >
+            <div className="panel ticks flex items-center gap-1 px-2 py-1.5">
+              <span className="hidden px-2 font-mono text-[8px] tracking-[0.28em] text-[#5f5849] sm:inline">TIME</span>
+              {[
+                [0, "II"],
+                [1, "1X"],
+                [8, "8X"],
+                [32, "32X"],
+              ].map(([s, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => applyTimeScale(s as number)}
+                  className={`px-2.5 py-1 font-mono text-[9px] tracking-[0.18em] transition-colors ${
+                    timeScale === s ? "bg-[rgba(255,180,84,0.16)] text-[#ffb454]" : "text-[#6b6355] hover:text-[#f0eadf]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="min-w-[86px] px-2 text-right font-mono text-[9px] tracking-[0.14em] text-[#a89e8c]">
+                T+{simYears.toFixed(1)} YR
+              </span>
             </div>
           </motion.div>
         )}

@@ -86,7 +86,7 @@ function particleRing(ctx: Ctx, inner: number, outer: number, count: number, cIn
   return ring;
 }
 
-function displacedRock(bag: DisposalBag, R: number, detail: number, amp: number, elong: THREE.Vector3, color: number) {
+export function displacedRock(bag: DisposalBag, R: number, detail: number, amp: number, elong: THREE.Vector3, color: number) {
   const geo = bag.add(new THREE.IcosahedronGeometry(R, detail));
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {

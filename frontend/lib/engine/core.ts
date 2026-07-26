@@ -5,7 +5,9 @@ import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { FINISH_FRAG, FINISH_VERT } from "./shaders";
 
 /** Tracks every disposable resource a scene creates. */
 export class DisposalBag {
@@ -44,7 +46,7 @@ export function makeBloom(
   renderer: THREE.WebGLRenderer,
   scene: THREE.Scene,
   camera: THREE.Camera,
-  opts: { strength?: number; radius?: number; threshold?: number } = {},
+  opts: { strength?: number; radius?: number; threshold?: number; finish?: boolean } = {},
 ) {
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
@@ -55,8 +57,44 @@ export function makeBloom(
     opts.threshold ?? 0.62,
   );
   composer.addPass(bloom);
+  let finish: ShaderPass | null = null;
+  if (opts.finish !== false) {
+    finish = new ShaderPass({
+      uniforms: { tDiffuse: { value: null }, uTime: { value: 0 } },
+      vertexShader: FINISH_VERT,
+      fragmentShader: FINISH_FRAG,
+    });
+    composer.addPass(finish);
+  }
   composer.addPass(new OutputPass());
-  return { composer, bloom };
+  return { composer, bloom, finish };
+}
+
+/** 360-degree Milky Way panorama photographed onto the inside of the sky. */
+export function buildSkySphere(
+  scene: THREE.Scene,
+  bag: DisposalBag,
+  loader: THREE.TextureLoader,
+  radius = 2600,
+  opacity = 0.5,
+): THREE.Mesh {
+  const tex = bag.add(loader.load("/textures/milkyway.jpg"));
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const geo = bag.add(new THREE.SphereGeometry(radius, 64, 48));
+  const mat = bag.add(
+    new THREE.MeshBasicMaterial({
+      map: tex,
+      side: THREE.BackSide,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+    }),
+  );
+  const sky = new THREE.Mesh(geo, mat);
+  sky.rotation.z = 0.9; // match the procedural galactic band tilt
+  sky.renderOrder = -10;
+  scene.add(sky);
+  return sky;
 }
 
 // Spectral class RGB: O (blue-white) -> M (red), weighted like a real sky.
@@ -84,7 +122,8 @@ export function spectralRGB(dim = 1): [number, number, number] {
   return [SPECTRAL[cls][0] * v, SPECTRAL[cls][1] * v, SPECTRAL[cls][2] * v];
 }
 
-/** Spherical shell of spectral-colored stars for parallax depth. */
+/** Spherical shell of spectral-colored stars for parallax depth.
+ *  Pass a radial sprite map to render round, softly-glowing HD stars. */
 export function buildStarShell(
   parent: THREE.Object3D,
   bag: DisposalBag,
@@ -94,6 +133,7 @@ export function buildStarShell(
   size: number,
   opacity: number,
   dim = 0.85,
+  map?: THREE.Texture,
 ): THREE.Points {
   const pos = new Float32Array(count * 3);
   const col = new Float32Array(count * 3);
@@ -115,10 +155,12 @@ export function buildStarShell(
   const mat = bag.add(
     new THREE.PointsMaterial({
       size,
+      map,
       vertexColors: true,
       sizeAttenuation: true,
       transparent: true,
       opacity,
+      blending: map ? THREE.AdditiveBlending : THREE.NormalBlending,
       depthWrite: false,
     }),
   );

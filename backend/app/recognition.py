@@ -89,6 +89,23 @@ _RINGED = re.compile(r"saturn|uranus", re.I)
 SOLAR_BODIES = {
     "sun", "mercury", "venus", "earth", "mars", "jupiter", "saturn",
     "uranus", "neptune", "moon", "io", "europa", "ganymede", "callisto", "titan",
+    # v4 expansion: dwarfs, new moons, comets
+    "ceres", "pluto", "charon", "haumea", "makemake", "eris",
+    "phobos", "deimos", "mimas", "enceladus", "rhea", "iapetus",
+    "miranda", "titania", "oberon", "triton",
+    "halley", "halebopp",
+}
+
+# Free-text aliases resolving to navigable body ids.
+SOLAR_ALIASES = {
+    "halley's comet": "halley",
+    "comet halley": "halley",
+    "1p/halley": "halley",
+    "hale-bopp": "halebopp",
+    "hale bopp": "halebopp",
+    "comet hale-bopp": "halebopp",
+    "the moon": "moon",
+    "the sun": "sun",
 }
 
 
@@ -128,6 +145,8 @@ def _solar_body(name: Optional[str], q: str) -> Optional[str]:
     for cand in ((name or "").lower(), q):
         if cand in SOLAR_BODIES:
             return cand
+        if cand in SOLAR_ALIASES:
+            return SOLAR_ALIASES[cand]
     return None
 
 

@@ -32,7 +32,7 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ASTRO — A Universe That Learns",
+  title: "ASTRO: A Universe That Learns",
   description:
     "An autonomous astronomical intelligence living inside a navigable 3D universe. Fly between worlds, wake the agent, and watch it learn.",
 };

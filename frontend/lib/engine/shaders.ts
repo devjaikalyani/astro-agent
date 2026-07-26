@@ -187,6 +187,238 @@ export const TERRA_FRAG = /* glsl */ `
   }
 `;
 
+// ── HD solar-system surface shaders ─────────────────────────────────────────
+
+// Body vertex shader with UVs, for texture-mapped worlds.
+export const BODY_UV_VERT = /* glsl */ `
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  varying vec2 vUv;
+  void main() {
+    vLocal = position;
+    vUv = uv;
+    vWorldN = normalize(mat3(modelMatrix) * normal);
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorldPos = wp.xyz;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+// Texture-mapped planet/moon lit by the Sun: soft terminator, limb
+// darkening, warm terminator glow, optional night-light map (Earth) and
+// ocean specular glint derived from the day map itself.
+export const SURFACE_FRAG = /* glsl */ `
+  uniform sampler2D uMap;
+  uniform sampler2D uNight;
+  uniform float uHasNight;
+  uniform float uOcean;
+  uniform vec3 uLightDir;
+  uniform float uAmbient;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  varying vec2 vUv;
+  void main() {
+    vec3 base = texture2D(uMap, vUv).rgb;
+    vec3 N = normalize(vWorldN);
+    vec3 L = normalize(uLightDir);
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    float d = dot(N, L);
+    float day = smoothstep(-0.12, 0.35, d);
+    float limb = 0.72 + 0.28 * pow(max(dot(N, V), 0.0), 0.6);
+    vec3 col = base * (uAmbient + day * 1.06) * limb;
+    // Warm band along the terminator
+    float term = exp(-pow(d * 3.4, 2.0));
+    col += base * vec3(1.0, 0.62, 0.32) * term * 0.22;
+    // Ocean glint (Earth): mask oceans by blue dominance in the day map
+    if (uOcean > 0.5) {
+      float ocean = smoothstep(0.02, 0.12, base.b - max(base.r, base.g) + 0.02);
+      vec3 H = normalize(L + V);
+      float spec = pow(max(dot(N, H), 0.0), 90.0) * ocean * day;
+      col += vec3(1.0, 0.9, 0.7) * spec * 0.9;
+    }
+    // City lights fade in past the terminator
+    if (uHasNight > 0.5) {
+      vec3 night = texture2D(uNight, vUv).rgb;
+      float dark = smoothstep(0.08, -0.22, d);
+      col += night * vec3(1.0, 0.82, 0.55) * dark * 1.9;
+    }
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+// The Sun: 4K surface map domain-warped by simplex noise, animated
+// granulation, limb darkening, HDR-bright for bloom.
+export const SUN_SURFACE_FRAG = /* glsl */ `
+  uniform sampler2D uMap;
+  uniform float uTime;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  varying vec2 vUv;
+  ${SIMPLEX_3D}
+  void main() {
+    vec3 p = normalize(vLocal);
+    float t = uTime * 0.05;
+    // Slow domain warp so the surface churns
+    vec2 warp = vec2(
+      snoise(p * 3.0 + vec3(t, 0.0, 0.0)),
+      snoise(p * 3.0 + vec3(0.0, t, 4.0))
+    ) * 0.006;
+    vec3 base = texture2D(uMap, vUv + warp).rgb;
+    float gran = fbm(p * 14.0 + vec3(uTime * 0.12, 0.0, 0.0));
+    float cells = ridged(p * 5.0 - vec3(0.0, uTime * 0.06, 0.0));
+    float heat = 0.78 + gran * 0.3 + cells * 0.18;
+    vec3 col = base * heat;
+    // Hot spots flare toward white
+    col = mix(col, vec3(1.0, 0.97, 0.82), smoothstep(0.72, 0.98, gran * cells) * 0.5);
+    vec3 N = normalize(vWorldN);
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    float limbF = pow(max(dot(N, V), 0.0), 0.45);
+    col *= 0.62 + 0.58 * limbF;
+    col *= 2.4;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+// Cloud sphere lit by the Sun; alpha from map luminance.
+export const CLOUD_FRAG = /* glsl */ `
+  uniform sampler2D uMap;
+  uniform vec3 uLightDir;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  varying vec2 vUv;
+  void main() {
+    vec3 c = texture2D(uMap, vUv).rgb;
+    float a = smoothstep(0.08, 0.65, dot(c, vec3(0.333)));
+    vec3 N = normalize(vWorldN);
+    float d = dot(N, normalize(uLightDir));
+    float day = smoothstep(-0.12, 0.35, d);
+    float term = exp(-pow(d * 3.4, 2.0));
+    vec3 col = vec3(1.0) * (0.04 + day * 1.15);
+    col += vec3(1.0, 0.6, 0.3) * term * 0.3;
+    gl_FragColor = vec4(col, a * 0.92);
+  }
+`;
+
+// Saturn's rings: radial strip texture, translucent, with the planet's
+// shadow cast across the far side.
+export const RING_VERT = /* glsl */ `
+  varying vec2 vUv;
+  varying vec3 vWorldPos;
+  void main() {
+    vUv = uv;
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorldPos = wp.xyz;
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }
+`;
+
+export const RING_FRAG = /* glsl */ `
+  uniform sampler2D uMap;
+  uniform vec3 uPlanetPos;
+  uniform float uPlanetR;
+  varying vec2 vUv;
+  varying vec3 vWorldPos;
+  void main() {
+    vec4 tex = texture2D(uMap, vec2(vUv.x, 0.5));
+    // Sun sits at the world origin: shadow where the planet blocks the ray
+    vec3 toSun = normalize(-vWorldPos);
+    vec3 rel = uPlanetPos - vWorldPos;
+    float along = dot(rel, toSun);
+    float shadow = 1.0;
+    if (along > 0.0) {
+      float perp = length(rel - toSun * along);
+      shadow = smoothstep(uPlanetR * 0.88, uPlanetR * 1.12, perp);
+    }
+    float lit = 0.28 + 0.72 * shadow;
+    vec3 col = tex.rgb * lit;
+    gl_FragColor = vec4(col, tex.a * 0.96);
+    if (gl_FragColor.a < 0.015) discard;
+  }
+`;
+
+// Pluto: procedural nitrogen-ice dwarf — bright heart-like plain, dark
+// tholin maculae, tan midlands.
+export const PLUTO_FRAG = /* glsl */ `
+  uniform vec3 uLightDir;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  ${SIMPLEX_3D}
+  void main() {
+    vec3 p = normalize(vLocal);
+    vec3 tan1 = vec3(0.66, 0.52, 0.40);
+    vec3 dark = vec3(0.24, 0.15, 0.09);
+    vec3 icePlain = vec3(0.85, 0.82, 0.76);
+    float mott = fbm(p * 2.6);
+    vec3 base = mix(tan1, dark, smoothstep(0.12, 0.5, fbm(p * 1.7 + 4.0)));
+    // Sputnik Planitia: one broad smooth bright basin
+    vec3 heartDir = normalize(vec3(0.62, 0.1, 0.78));
+    float heart = smoothstep(0.34, 0.72, dot(p, heartDir) - fbm(p * 3.0) * 0.18);
+    base = mix(base, icePlain, heart);
+    base += mott * 0.05;
+    vec3 N = normalize(vWorldN);
+    vec3 V = normalize(cameraPosition - vWorldPos);
+    float d = dot(N, normalize(uLightDir));
+    float day = smoothstep(-0.1, 0.4, d);
+    float limb = 0.7 + 0.3 * pow(max(dot(N, V), 0.0), 0.6);
+    vec3 col = base * (0.05 + day * 0.8) * limb;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+// Generic icy moon: cratered bright terrain tinted per body.
+export const ICY_MOON_FRAG = /* glsl */ `
+  uniform vec3 uBase;
+  uniform vec3 uLightDir;
+  varying vec3 vLocal;
+  varying vec3 vWorldN;
+  varying vec3 vWorldPos;
+  ${SIMPLEX_3D}
+  void main() {
+    vec3 p = normalize(vLocal);
+    float mott = fbm(p * 3.2) * 0.5 + 0.5;
+    float craters = pow(1.0 - abs(snoise(p * 6.5)), 6.0) * 0.5
+                  + pow(1.0 - abs(snoise(p * 13.0 + 7.0)), 8.0) * 0.35;
+    vec3 base = uBase * (0.78 + mott * 0.34);
+    base *= 1.0 - craters * 0.38;
+    vec3 N = normalize(vWorldN);
+    vec3 L = normalize(uLightDir);
+    float d = dot(N, L);
+    float day = smoothstep(-0.1, 0.45, d);
+    vec3 col = base * (0.05 + day * 1.02);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+// Final-frame finishing pass: vignette + animated film grain.
+export const FINISH_FRAG = /* glsl */ `
+  uniform sampler2D tDiffuse;
+  uniform float uTime;
+  varying vec2 vUv;
+  float hash(vec2 v) { return fract(sin(dot(v, vec2(12.9898, 78.233))) * 43758.5453); }
+  void main() {
+    vec4 c = texture2D(tDiffuse, vUv);
+    vec2 q = vUv - 0.5;
+    float vig = 1.0 - dot(q, q) * 0.55;
+    c.rgb *= vig;
+    float g = hash(vUv * vec2(1920.0, 1080.0) + fract(uTime) * 43.0) - 0.5;
+    c.rgb += g * 0.028;
+    gl_FragColor = c;
+  }
+`;
+
+export const FINISH_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
 // Icy moon: bright ice, rust-colored lineae crack network, chaos terrain.
 export const ICY_FRAG = /* glsl */ `
   uniform float uTime;

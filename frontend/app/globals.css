@@ -23,11 +23,9 @@
   --ice: #9fd8ff;
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* No custom `*` reset here: Tailwind v4 preflight already zeroes margins,
+   padding and sets border-box — and an unlayered reset would override the
+   layered utility classes in route-split CSS bundles. */
 
 html,
 body {
